@@ -15,7 +15,7 @@
         "testnet:sweep-fees": "ts-node scripts/acton_sweep_fee_tokens_to_ton.ts",
         "indexer": "ts-node scripts/indexer.ts",
         "tonapi:webhooks": "ts-node scripts/tonapi_webhooks.ts",
-        "live-events": "ts-node scripts/live_events_server.ts",
+        "live-events": "node scripts/live_events_server.js",
         "test": "jest --verbose",
         "release": "blueprint pack && npm publish --access public"
     },
