@@ -37,7 +37,7 @@ const POOLS_PER_TICK = Math.max(1, Number(process.env.INDEXER_POOLS_PER_TICK || 
 const RPC_RETRY_ATTEMPTS = Math.max(1, Number(process.env.INDEXER_RPC_RETRY_ATTEMPTS || 3));
 const RPC_RETRY_BASE_MS = Math.max(1000, Number(process.env.INDEXER_RPC_RETRY_BASE_MS || 4000));
 const INDEXER_LOCK_PATH = process.env.INDEXER_LOCK_PATH || path.join(process.cwd(), 'logs', 'indexer.lock');
-const TONAPI_WEBHOOK_PORT = Number(process.env.TONAPI_WEBHOOK_PORT || 8790);
+const TONAPI_WEBHOOK_PORT = Number(process.env.PORT || process.env.TONAPI_WEBHOOK_PORT || 8790);
 const TONAPI_WEBHOOK_SECRET = process.env.TONAPI_WEBHOOK_SECRET || '';
 const TONAPI_WEBHOOK_ENABLED = process.env.TONAPI_WEBHOOK_ENABLED !== 'false';
 const TON_USD_PRICE = Number(TON_USD_PRICE_NUM) / Number(TON_USD_PRICE_DEN);
@@ -402,7 +402,7 @@ function startTonapiWebhookReceiver() {
   });
 
   server.listen(TONAPI_WEBHOOK_PORT, () => {
-    console.log(`TonAPI webhook receiver listening on http://127.0.0.1:${TONAPI_WEBHOOK_PORT}/tonapi/webhook`);
+    console.log(`TonAPI webhook receiver listening on http://0.0.0.0:${TONAPI_WEBHOOK_PORT}/tonapi/webhook`);
   });
 }
 
@@ -859,6 +859,7 @@ async function handleTokenDeployed(body: Cell) {
   const initialPrice = getPriceInNanotons(INITIAL_VIRTUAL_TON, INITIAL_VIRTUAL_TOKENS);
 
   console.log(`New token deployed: ${bcAddrStr}`);
+  invalidCurveAddresses.delete(bcAddrStr);
   await upsertToken({
     address: bcAddrStr,
     jetton_address: jmAddrStr,

@@ -44,19 +44,24 @@ async function tonapi<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(`TonAPI ${init.method || 'GET'} ${path} failed: ${response.status} ${await response.text()}`);
   }
 
-  return response.json() as Promise<T>;
+  const text = await response.text();
+  if (!text.trim()) return {} as T;
+  return JSON.parse(text) as T;
 }
 
 async function findOrCreateWebhook(): Promise<number> {
-  const existing = await tonapi<{ webhooks?: Webhook[] }>('/webhooks');
-  const match = existing.webhooks?.find((webhook) => webhook.endpoint === TONAPI_WEBHOOK_ENDPOINT);
+  const existing = await tonapi<{ webhooks?: Webhook[] } | Webhook[]>('/webhooks');
+  const webhooks = Array.isArray(existing) ? existing : existing.webhooks || [];
+  const match = webhooks.find((webhook) => webhook.endpoint === TONAPI_WEBHOOK_ENDPOINT);
   if (match?.id || match?.webhook_id) return Number(match.id || match.webhook_id);
 
-  const created = await tonapi<{ webhook_id: number }>('/webhooks', {
+  const created = await tonapi<{ id?: number; webhook_id?: number }>('/webhooks', {
     method: 'POST',
     body: JSON.stringify({ endpoint: TONAPI_WEBHOOK_ENDPOINT }),
   });
-  return created.webhook_id;
+  const webhookId = Number(created.webhook_id || created.id);
+  if (!webhookId) throw new Error('TonAPI did not return a webhook id');
+  return webhookId;
 }
 
 async function loadWatchedAccounts(): Promise<string[]> {

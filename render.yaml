@@ -12,3 +12,30 @@ services:
         value: production
       - key: LIVE_EVENTS_SECRET
         sync: false
+  - type: web
+    name: tonked-indexer
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev
+    startCommand: npm run indexer
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: NEXT_PUBLIC_FACTORY_ADDRESS
+        sync: false
+      - key: TONCENTER_API_KEY
+        sync: false
+      - key: TONAPI_KEY
+        sync: false
+      - key: TONAPI_WEBHOOK_SECRET
+        sync: false
+      - key: LIVE_EVENTS_WEBHOOK_URL
+        value: https://tonked-live-events.onrender.com/webhook
+      - key: LIVE_EVENTS_SECRET
+        sync: false
