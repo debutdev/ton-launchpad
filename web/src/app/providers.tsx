@@ -93,7 +93,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <MediaQueryProvider>
       <ThemeProvider theme={defaultTheme} activeColorScheme={colorScheme}>
         <ThemeModeContext.Provider value={themeContextValue}>
-          <TonConnectUIProvider manifestUrl={manifestUrl}>
+          <TonConnectUIProvider
+            manifestUrl={manifestUrl}
+            restoreConnection={false}
+            actionsConfiguration={{ returnStrategy: 'back' }}
+          >
             {children}
           </TonConnectUIProvider>
         </ThemeModeContext.Provider>
