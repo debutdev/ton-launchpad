@@ -6,7 +6,7 @@ dotenv.config();
 
 const TONAPI_KEY = process.env.TONAPI_KEY || '';
 const TONAPI_WEBHOOK_ENDPOINT = process.env.TONAPI_WEBHOOK_ENDPOINT || '';
-const TONAPI_BASE_URL = process.env.TONAPI_WEBHOOK_BASE_URL || 'https://rt.tonapi.io';
+const TONAPI_BASE_URL = process.env.TONAPI_WEBHOOK_BASE_URL || 'https://rt-testnet.tonapi.io';
 
 type Webhook = {
   id?: number;
