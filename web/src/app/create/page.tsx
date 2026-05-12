@@ -82,12 +82,16 @@ export default function CreateToken() {
       const creatorAddress = Address.parse(wallet.account.address).toString();
       const queryId = BigInt(Date.now());
       const body = deployTokenBody(queryId, uploadData.metadataUrl);
+      const factoryAddress = process.env.NEXT_PUBLIC_FACTORY_ADDRESS?.trim();
+      if (!factoryAddress) {
+        throw new Error('Factory address is not configured for this deployment.');
+      }
 
       setStatusMessage('Confirm token launch in your wallet...');
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 300,
         messages: [{
-          address: process.env.NEXT_PUBLIC_FACTORY_ADDRESS || '',
+          address: factoryAddress,
           amount: DEFAULT_DEPLOY_VALUE.toString(),
           payload: body.toBoc().toString('base64'),
         }],
