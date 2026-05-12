@@ -1,0 +1,32 @@
+node_modules
+temp
+build
+.acton
+dist
+.DS_Store
+package.ts
+.env
+.env.*
+!.env.example
+logs/
+.npm-cache/
+tools/
+.vercel/
+*.log
+
+# VS Code
+.vscode/*
+.history/
+*.vsix
+
+# IDEA files
+.idea
+
+# VIM
+Session.vim
+.vim/
+
+# Other private editor folders
+.nvim/
+.emacs/
+.helix/

@@ -1,0 +1,187 @@
+import { Address, SendMode, Cell, beginCell, toNano } from '@ton/core';
+import { TonClient, WalletContractV5R1, internal } from '@ton/ton';
+import { mnemonicToWalletKey } from '@ton/crypto';
+import { DEX } from '@ston-fi/sdk';
+import * as dotenv from 'dotenv';
+import { jettonTransferBody } from '../wrappers/acton/LaunchpadActon';
+
+dotenv.config();
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function hasFlag(flag: string): boolean {
+  return process.argv.includes(flag);
+}
+
+function argValue(name: string): string | undefined {
+  const prefixed = `${name}=`;
+  const found = process.argv.find((arg) => arg.startsWith(prefixed));
+  if (found) return found.slice(prefixed.length);
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+async function retry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  while (true) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      if (error?.isAxiosError || error?.response?.status === 429) {
+        console.log(`Rate limited on ${label}; retrying in 3s`);
+        await sleep(3000);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function waitSeqno(wallet: { getSeqno(): Promise<number> }, seqno: number): Promise<void> {
+  while ((await retry('getSeqno', () => wallet.getSeqno())) === seqno) {
+    await sleep(3000);
+  }
+}
+
+async function sendOne(args: {
+  wallet: any;
+  secretKey: Buffer | Uint8Array;
+  to: Address;
+  value: bigint;
+  body: Cell;
+}): Promise<void> {
+  const seqno = Number(await retry('getSeqno', () => args.wallet.getSeqno()));
+  await retry('sendTransfer', () =>
+    args.wallet.sendTransfer({
+      seqno,
+      secretKey: args.secretKey,
+      sendMode: SendMode.PAY_GAS_SEPARATELY,
+      messages: [
+        internal({
+          to: args.to,
+          value: args.value,
+          bounce: true,
+          body: args.body,
+        }),
+      ],
+    }),
+  );
+  await waitSeqno(args.wallet, seqno);
+}
+
+async function getWalletAddress(client: TonClient, master: Address, owner: Address): Promise<Address> {
+  const result = await retry('get_wallet_address', () =>
+    client.runMethod(master, 'get_wallet_address', [
+      {
+        type: 'slice',
+        cell: beginCell().storeAddress(owner).endCell(),
+      },
+    ]),
+  );
+  return result.stack.readAddress();
+}
+
+async function jettonBalance(client: TonClient, wallet: Address): Promise<bigint> {
+  const state = await retry('getContractState(jettonWallet)', () => client.getContractState(wallet));
+  if (state.state !== 'active') return 0n;
+  const result = await retry('get_wallet_data', () => client.runMethod(wallet, 'get_wallet_data'));
+  return result.stack.readBigNumber();
+}
+
+async function main() {
+  const execute = hasFlag('--execute') && !hasFlag('--dry-run');
+  const jettonMasterRaw = argValue('--jetton-master') || process.env.SWEEP_JETTON_MASTER;
+  if (!jettonMasterRaw) {
+    throw new Error('Pass --jetton-master=<address> or set SWEEP_JETTON_MASTER');
+  }
+
+  const routerRaw = process.env.STONFI_ROUTER_ADDRESS;
+  const ptonWalletRaw = process.env.STONFI_PTON_WALLET_ADDRESS;
+  const mnemonicRaw = process.env.TESTNET_PLATFORM_WALLET_MNEMONIC || process.env.PLATFORM_WALLET_MNEMONIC;
+  if (!routerRaw || !ptonWalletRaw || !mnemonicRaw || !process.env.TONCENTER_API_KEY) {
+    throw new Error('Set STONFI_ROUTER_ADDRESS, STONFI_PTON_WALLET_ADDRESS, TESTNET_PLATFORM_WALLET_MNEMONIC, and TONCENTER_API_KEY');
+  }
+
+  const endpoint = process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC';
+  const client = new TonClient({ endpoint, apiKey: process.env.TONCENTER_API_KEY });
+  const key = await mnemonicToWalletKey(mnemonicRaw.trim().split(/\s+/));
+  const wallet = WalletContractV5R1.create({
+    publicKey: key.publicKey,
+    walletId: { networkGlobalId: -239 },
+  });
+  const openedWallet = client.open(wallet);
+  const expectedPlatform = process.env.TESTNET_PLATFORM_WALLET
+    ? Address.parse(process.env.TESTNET_PLATFORM_WALLET)
+    : null;
+  if (expectedPlatform && !wallet.address.equals(expectedPlatform)) {
+    throw new Error('TESTNET_PLATFORM_WALLET_MNEMONIC does not match TESTNET_PLATFORM_WALLET');
+  }
+
+  const jettonMaster = Address.parse(jettonMasterRaw);
+  const router = Address.parse(routerRaw);
+  const ptonWallet = Address.parse(ptonWalletRaw);
+  const platformJettonWallet = await getWalletAddress(client, jettonMaster, wallet.address);
+  const tokenBalance = await jettonBalance(client, platformJettonWallet);
+  const tonBefore = await retry('getBalance(platform)', () => client.getBalance(wallet.address));
+  const amountRaw = argValue('--amount-nano');
+  const amount = amountRaw ? BigInt(amountRaw) : tokenBalance;
+  const txValue = toNano(argValue('--tx-value-ton') || '0.4');
+  const forwardTonAmount = toNano(argValue('--forward-ton') || '0.25');
+  const maxSpend = toNano(argValue('--max-spend-ton') || process.env.TESTNET_SWEEP_MAX_SPEND_TON || '0.5');
+
+  console.log(`Mode: ${execute ? 'EXECUTE' : 'DRY RUN'}`);
+  console.log(`Platform wallet: ${wallet.address.toString({ testOnly: true })}`);
+  console.log(`Fee token wallet: ${platformJettonWallet.toString({ testOnly: true })}`);
+  console.log(`Fee token balance: ${Number(tokenBalance) / 1e9}`);
+  console.log(`Sweep amount: ${Number(amount) / 1e9}`);
+  console.log(`Platform TON balance before: ${Number(tonBefore) / 1e9}`);
+
+  if (amount <= 0n) throw new Error('No fee tokens to sweep');
+  if (txValue > maxSpend) {
+    throw new Error(`tx value exceeds max spend: ${Number(txValue) / 1e9} > ${Number(maxSpend) / 1e9}`);
+  }
+  if (!execute) {
+    console.log('Dry-run only. Add --execute to swap fee tokens to TON.');
+    return;
+  }
+  if (tonBefore <= txValue) {
+    throw new Error('Platform wallet needs more TON for sweep gas');
+  }
+
+  const routerContract = new DEX.v2_1.Router.CPI(router);
+  const swapPayload = await routerContract.createSwapBody({
+    askJettonWalletAddress: ptonWallet,
+    refundAddress: wallet.address,
+    excessesAddress: wallet.address,
+    receiverAddress: wallet.address,
+    minAskAmount: BigInt(argValue('--min-ton-out-nano') || '0'),
+    referralValue: 0,
+    deadline: Math.floor(Date.now() / 1000) + 900,
+  });
+
+  await sendOne({
+    wallet: openedWallet,
+    secretKey: key.secretKey,
+    to: platformJettonWallet,
+    value: txValue,
+    body: jettonTransferBody({
+      queryId: BigInt(Date.now()),
+      amount,
+      destination: router,
+      responseDestination: wallet.address,
+      forwardTonAmount,
+      forwardPayload: swapPayload,
+      forwardPayloadByRef: true,
+    }),
+  });
+
+  await sleep(20000);
+  const tokenBalanceAfter = await jettonBalance(client, platformJettonWallet);
+  const tonAfter = await retry('getBalance(platform)', () => client.getBalance(wallet.address));
+  console.log(`Fee token balance after: ${Number(tokenBalanceAfter) / 1e9}`);
+  console.log(`Platform TON balance after: ${Number(tonAfter) / 1e9}`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

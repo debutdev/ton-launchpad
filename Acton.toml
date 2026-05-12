@@ -1,0 +1,47 @@
+[toolchain]
+acton = "1.0.0"
+
+[package]
+name = "tonked-launchpad"
+description = "Pump.fun-style TON launchpad contracts with sell-fee Jettons and STON.fi migration"
+version = "0.1.0"
+
+[contracts.BondingCurve]
+src = "contracts/acton/bonding_curve.tolk"
+depends = []
+
+[contracts.FeeJettonMaster]
+src = "contracts/acton/fee_jetton_master.tolk"
+depends = []
+
+[contracts.FeeJettonWallet]
+src = "contracts/acton/fee_jetton_wallet.tolk"
+depends = []
+
+[contracts.LaunchpadFactory]
+src = "contracts/acton/launchpad_factory.tolk"
+depends = []
+
+[build]
+out-dir = "build/acton"
+gen-dir = "gen"
+output-abi = "build/acton/abi"
+output-fift = "build/acton/fift"
+
+[wrappers.tolk]
+output-dir = "wrappers/acton-tolk"
+test-output-dir = "tests/acton"
+
+[wrappers.typescript]
+output-dir = "wrappers/acton-ts"
+
+[lint]
+max-warnings = 0
+exclude = ["wrappers/acton-tolk/*.tolk"]
+
+[import-mappings]
+acton = ".acton"
+contracts = "contracts"
+tests = "tests"
+wrappers = "wrappers"
+gen = "gen"

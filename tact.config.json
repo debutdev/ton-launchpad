@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tact-lang/tact/main/src/config/configSchema.json",
+  "projects": [
+    {
+      "name": "BondingCurve",
+      "path": "contracts/bonding_curve.tact",
+      "output": "build/BondingCurve",
+      "options": {
+        "debug": true,
+        "external": false
+      },
+      "mode": "full"
+    },
+    {
+      "name": "LaunchpadFactory",
+      "path": "contracts/launchpad_factory.tact",
+      "output": "build/LaunchpadFactory",
+      "options": {
+        "debug": true,
+        "external": false
+      },
+      "mode": "full"
+    }
+  ]
+}

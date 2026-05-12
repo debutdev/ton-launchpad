@@ -1,0 +1,39 @@
+name: Acton
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Acton
+        uses: ton-blockchain/setup-acton@2d38fd579e1bf8753a3e0cff9ad695612b98a676 # v1.0.0
+        with:
+          version: "1.0.0"
+          platform: linux
+          architecture: x86_64
+
+      - name: Acton version
+        run: acton --version
+
+      - name: Build contracts
+        run: acton build
+
+      - name: Check contracts
+        run: acton check --output-format github
+
+      - name: Test contracts
+        run: acton test
+
+      - name: Format contracts
+        run: acton fmt --check

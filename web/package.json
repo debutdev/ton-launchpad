@@ -1,0 +1,44 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@coinbase/cds-web": "^8.69.1",
+    "@coinbase/cds-web-visualization": "^3.7.0",
+    "@ston-fi/api": "^0.32.0",
+    "@ston-fi/sdk": "^2.7.0",
+    "@supabase/supabase-js": "^2.105.3",
+    "@ton/core": "^0.63.1",
+    "@ton/crypto": "^3.3.0",
+    "@ton/ton": "^16.2.4",
+    "@tonconnect/ui-react": "^2.4.4",
+    "@twa-dev/sdk": "^8.0.2",
+    "clsx": "^2.1.1",
+    "framer-motion": "^10.18.0",
+    "lightweight-charts": "^4.2.3",
+    "lucide-react": "^1.14.0",
+    "next": "16.2.5",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.5",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

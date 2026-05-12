@@ -1,0 +1,46 @@
+{
+    "name": "tonlaunchpad",
+    "version": "0.0.1",
+    "scripts": {
+        "bp": "blueprint",
+        "start": "blueprint run",
+        "build": "blueprint build",
+        "build:acton": "acton build",
+        "build:tolk": "acton build",
+        "check:acton": "acton check",
+        "test:acton": "acton test",
+        "fmt:acton": "acton fmt --check",
+        "testnet:acton:dry-run": "ts-node scripts/acton_testnet_e2e.ts --dry-run",
+        "testnet:acton": "ts-node scripts/acton_testnet_e2e.ts --execute",
+        "testnet:sweep-fees": "ts-node scripts/acton_sweep_fee_tokens_to_ton.ts",
+        "indexer": "ts-node scripts/indexer.ts",
+        "tonapi:webhooks": "ts-node scripts/tonapi_webhooks.ts",
+        "live-events": "ts-node scripts/live_events_server.ts",
+        "test": "jest --verbose",
+        "release": "blueprint pack && npm publish --access public"
+    },
+    "dependencies": {
+        "@dedust/sdk": "^0.8.7",
+        "@ston-fi/sdk": "^2.7.0",
+        "@supabase/supabase-js": "^2.105.3",
+        "@ton/core": "~0",
+        "dotenv": "^17.4.2"
+    },
+    "devDependencies": {
+        "@tact-lang/compiler": ">=1.6.13 <2.0.0",
+        "@ton-community/func-js": ">=0.10.0",
+        "@ton/blueprint": ">=0.40.0",
+        "@ton/crypto": "^3.3.0",
+        "@ton/sandbox": ">=0.37.0",
+        "@ton/test-utils": ">=0.11.0",
+        "@ton/tolk-js": ">=1.0.0",
+        "@ton/ton": ">=16.2.2 <17.0.0",
+        "@types/jest": "^30.0.0",
+        "@types/node": "^22.17.2",
+        "jest": "^30.0.5",
+        "prettier": "^3.6.2",
+        "ts-jest": "^29.4.1",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.9.2"
+    }
+}
