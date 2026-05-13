@@ -22,6 +22,41 @@ contract BondingCurve(
     dedustPool: Address,
 ) {
 
+    fun normalizeForwardPayload(payload: Slice): Slice {
+        if (payload.bits() >= 32) {
+            let rawOp = payload.preloadUint(32);
+            if (rawOp == 0x10002 || rawOp == 0x10004) {
+                return payload;
+            }
+        }
+
+        if (payload.bits() < 33) {
+            if (payload.bits() >= 1) {
+                let payloadRef = payload.preloadMaybeRef();
+                if (payloadRef != null) {
+                    return payloadRef!!.asSlice();
+                }
+            }
+
+            return payload;
+        }
+
+        let probe = payload;
+        let eitherTag = probe.loadUint(1);
+        if (eitherTag == 0 && probe.bits() >= 32) {
+            return probe;
+        }
+
+        if (eitherTag == 1) {
+            let payloadRef = probe.preloadMaybeRef();
+            if (payloadRef != null) {
+                return payloadRef!!.asSlice();
+            }
+        }
+
+        return payload;
+    }
+
     // ─── Buy Tokens ──────────────────────────────────────────────────────────
 
     receive(msg: BuyTokens) {
@@ -95,7 +130,7 @@ contract BondingCurve(
     // We receive JettonNotification when tokens arrive.
 
     receive(msg: JettonNotification) {
-        let payload = msg.forwardPayload;
+        let payload = self.normalizeForwardPayload(msg.forwardPayload);
         let opcode = payload.loadUint(32);
 
         if (opcode == 0x10004) {

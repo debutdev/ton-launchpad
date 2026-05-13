@@ -255,6 +255,7 @@ describe('BondingCurve Contract', () => {
     const buyerWallet = blockchain.openContract(JettonWallet.fromAddress(buyerWalletAddress));
     const platformTonBefore = await platformWallet.getBalance();
     const sellPayload = beginCell()
+      .storeBit(0)
       .storeUint(0x10002, 32)
       .storeUint(2n, 64)
       .storeCoins(0)

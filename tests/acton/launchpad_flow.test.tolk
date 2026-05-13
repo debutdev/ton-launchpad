@@ -104,6 +104,10 @@ fun launchToken(
 }
 
 fun setupFlow(): FlowSetup {
+    return setupFlowWithMigrationCap(LOW_TEST_MIGRATION_CAP);
+}
+
+fun setupFlowWithMigrationCap(migrationMarketCapTon: coins): FlowSetup {
     testing.setNow(1_800_000_000);
     val owner = testing.treasury("owner");
     val alice = testing.treasury("alice");
@@ -115,7 +119,7 @@ fun setupFlow(): FlowSetup {
     val factory = deployFactory(
         owner,
         platform,
-        LOW_TEST_MIGRATION_CAP,
+        migrationMarketCapTon,
         router,
         pton,
         lp,
@@ -138,15 +142,19 @@ fun walletBalance(master: FeeJettonMaster, owner: address): coins {
     return tokenWallet.getWalletData().balance;
 }
 
-fun sellPayload(queryId: uint64): RemainingBitsAndRefs {
+fun sellPayloadWithMin(queryId: uint64, minTonOut: coins): RemainingBitsAndRefs {
     return inlineForwardPayload(
         beginCell()
             .storeUint(OP_BONDING_CURVE_SELL, 32)
             .storeUint(queryId, 64)
-            .storeCoins(0)
+            .storeCoins(minTonOut)
             .endCell()
             .beginParse(),
     );
+}
+
+fun sellPayload(queryId: uint64): RemainingBitsAndRefs {
+    return sellPayloadWithMin(queryId, 0);
 }
 
 fun stonfiSwapPayload(): RemainingBitsAndRefs {
@@ -211,6 +219,78 @@ get fun `test buy then sell sends two percent TON to platform`() {
     expect(
         testing.getAccountBalance(setup.platform.address) >= platformTonBefore + quote.fee,
     ).toBeTrue();
+}
+
+get fun `test large sell pays TON and does not strand tokens in curve wallet`() {
+    val setup = setupFlowWithMigrationCap(START_MARKET_CAP_TON + ton("100"));
+
+    val buyRes = setup
+        .curve
+        .sendBuyTokens(
+            setup.alice.address,
+            250,
+            0,
+            { value: ton("8.8"), bounce: true },
+        );
+    expect(buyRes).toHaveAllSuccessfulTxs();
+
+    val aliceTokens = walletBalance(setup.master, setup.alice.address);
+    expect(aliceTokens > 0).toBeTrue();
+    val quote = setup.curve.getSellQuote(aliceTokens);
+    val aliceTonBefore = testing.getAccountBalance(setup.alice.address);
+    val platformTonBefore = testing.getAccountBalance(setup.platform.address);
+
+    val sellRes = wallet(setup.master, setup.alice.address).sendJettonTransfer(
+        setup.alice.address,
+        251,
+        aliceTokens,
+        setup.curve.address,
+        setup.alice.address,
+        null,
+        ton("0.15"),
+        sellPayload(251),
+        { value: ton("0.3"), bounce: true },
+    );
+    expect(sellRes).toHaveAllSuccessfulTxs();
+
+    expect(walletBalance(setup.master, setup.alice.address)).toEqual(0);
+    expect(walletBalance(setup.master, setup.curve.address)).toEqual(0);
+    expect(testing.getAccountBalance(setup.alice.address) > aliceTonBefore).toBeTrue();
+    expect(
+        testing.getAccountBalance(setup.platform.address) >= platformTonBefore + quote.fee,
+    ).toBeTrue();
+}
+
+get fun `test failed sell notification refunds tokens to seller`() {
+    val setup = setupFlowWithMigrationCap(START_MARKET_CAP_TON + ton("100"));
+
+    val buyRes = setup
+        .curve
+        .sendBuyTokens(
+            setup.alice.address,
+            260,
+            0,
+            { value: ton("1.0"), bounce: true },
+        );
+    expect(buyRes).toHaveAllSuccessfulTxs();
+
+    val aliceTokens = walletBalance(setup.master, setup.alice.address);
+    expect(aliceTokens > 0).toBeTrue();
+
+    wallet(setup.master, setup.alice.address).sendJettonTransfer(
+        setup.alice.address,
+        261,
+        aliceTokens,
+        setup.curve.address,
+        setup.alice.address,
+        null,
+        ton("0.15"),
+        sellPayloadWithMin(261, ton("1000")),
+        { value: ton("0.3"), bounce: true },
+    );
+
+    expect(walletBalance(setup.master, setup.alice.address)).toEqual(aliceTokens);
+    expect(walletBalance(setup.master, setup.curve.address)).toEqual(0);
 }
 
 get fun `test low cap buy migrates and closes minting`() {

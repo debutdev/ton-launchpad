@@ -199,7 +199,7 @@ fun onInternalMessage(in: InMessage) {
 
             if (msg.forwardTonAmount > 0) {
                 val notificationMsg = createMessage({
-                    bounce: BounceMode.NoBounce,
+                    bounce: BounceMode.RichBounce,
                     value: msg.forwardTonAmount,
                     dest: storage.owner,
                     body: JettonNotification {
@@ -249,6 +249,42 @@ fun onInternalMessage(in: InMessage) {
 fun onBouncedMessage(in: InMessageBounced) {
     var storage = WalletStorage.load();
     var body = in.bouncedBody;
+
+    if (body.remainingBitsCount() >= 32 && body.preloadUint(32) == 0xfffffffe) {
+        val rich = RichBounceBody.fromSlice(body);
+        val notification = JettonNotification.fromCell(rich.originalBody);
+
+        storage.balance -= notification.amount;
+        assert (storage.balance >= 0) throw 410;
+        storage.save();
+
+        val refundMsg = createMessage({
+            bounce: BounceMode.Only256BitsOfBody,
+            value: 0,
+            dest: AutoDeployAddress {
+                workchain: BASECHAIN,
+                stateInit: feeWalletState(
+                    notification.sender,
+                    storage.minter,
+                    storage.platformWallet,
+                    contract.getCode(),
+                ),
+            },
+            body: JettonTransferInternal {
+                queryId: notification.queryId,
+                amount: notification.amount,
+                sender: storage.owner,
+                responseDestination: notification.sender,
+                forwardTonAmount: 0,
+                forwardPayload: emptyForwardPayload(),
+            },
+        });
+        refundMsg.send(
+            SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_BOUNCE_ON_ACTION_FAIL,
+        );
+        return;
+    }
+
     body.skipBits(32);
 
     if (body.remainingBitsCount() >= 32) {
