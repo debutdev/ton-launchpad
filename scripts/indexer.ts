@@ -394,7 +394,7 @@ function startTonapiWebhookReceiver() {
 
     if (request.method === 'GET' && url.pathname === '/health') {
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ ok: true }));
+      response.end(JSON.stringify({ ok: true, factory: FACTORY_ADDRESS }));
       return;
     }
 
