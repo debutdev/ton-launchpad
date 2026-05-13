@@ -976,7 +976,7 @@ async function pollBondingCurves() {
   for (const addr of selected.batch) {
     try {
       const txs = await retry('getTransactions(curve)', () =>
-        client.getTransactions(Address.parse(addr), { limit: 15, archival: false }),
+        client.getTransactions(Address.parse(addr), { limit: 40, archival: false }),
       );
 
       for (const tx of txs) {

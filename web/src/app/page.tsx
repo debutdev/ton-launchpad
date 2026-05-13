@@ -2,13 +2,14 @@
 
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import { RollingNumber } from '@coinbase/cds-web/numbers/RollingNumber';
-import { Bell, Moon, Search, Sun } from 'lucide-react';
+import { Bell, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { HexagonPattern } from './HexagonPattern';
 import { InteractiveDots } from './InteractiveDots';
 import { NumberTicker } from './NumberTicker';
 import { TopbarNav } from './TopbarNav';
+import { TopbarSearch } from './TopbarSearch';
 import { WordRotate } from './WordRotate';
 import { useThemeMode } from './providers';
 import { getMarketCap, getPriceInNanotons, MIGRATION_THRESHOLD } from '@/lib/bondingCurve';
@@ -40,6 +41,7 @@ type TokenRow = {
 type MemeTradeRow = {
   token_address: string | null;
   ton_amount: string | null;
+  trader_address: string | null;
   user_address: string | null;
 };
 
@@ -81,168 +83,6 @@ type RecentActivityItem = {
 };
 
 const NANOS_PER_TON = 1_000_000_000;
-
-const FALLBACK_MEME_IMAGES = [
-  '/memes/tonk-batcat.jpg',
-  '/memes/rocket-cat.png',
-  '/memes/blue-pepe.png',
-  '/memes/diamond-frog.png',
-  '/memes/ice-hamster.png',
-  '/memes/moon-toast.jpg',
-  '/memes/pixel-whale.png',
-];
-
-function fallbackMemeImageUrl(rank: number) {
-  return FALLBACK_MEME_IMAGES[(Math.max(rank, 1) - 1) % FALLBACK_MEME_IMAGES.length];
-}
-
-const FALLBACK_TOP_MEMES: TopMeme[] = [
-  {
-    rank: 1,
-    name: 'Tonked Inu',
-    ticker: 'TONK',
-    address: 'EQB1memeLaunchpadTopToken000000000000000001',
-    creatorAddress: 'UQB1creatorLaunchpad000000000000000000001',
-    imageUrl: fallbackMemeImageUrl(1),
-    marketCapTon: 18_400,
-    priceTon: 0.0000184,
-    holders: 1284,
-    volumeTon: 2840,
-    progressPercent: 25.86,
-    accentHue: 210,
-  },
-  {
-    rank: 2,
-    name: 'Rocket Cat',
-    ticker: 'ROCAT',
-    address: 'EQB2memeLaunchpadTopToken000000000000000002',
-    creatorAddress: 'UQB2creatorLaunchpad000000000000000000002',
-    imageUrl: fallbackMemeImageUrl(2),
-    marketCapTon: 12_700,
-    priceTon: 0.0000127,
-    holders: 918,
-    volumeTon: 1760,
-    progressPercent: 18.42,
-    accentHue: 254,
-  },
-  {
-    rank: 3,
-    name: 'Blue Pepe',
-    ticker: 'BPEPE',
-    address: 'EQB3memeLaunchpadTopToken000000000000000003',
-    creatorAddress: 'UQB3creatorLaunchpad000000000000000000003',
-    imageUrl: fallbackMemeImageUrl(3),
-    marketCapTon: 9_520,
-    priceTon: 0.00000952,
-    holders: 642,
-    volumeTon: 1118,
-    progressPercent: 12.94,
-    accentHue: 188,
-  },
-  {
-    rank: 4,
-    name: 'Diamond Frog',
-    ticker: 'DFROG',
-    address: 'EQB4memeLaunchpadTopToken000000000000000004',
-    creatorAddress: 'UQB4creatorLaunchpad000000000000000000004',
-    imageUrl: fallbackMemeImageUrl(4),
-    marketCapTon: 7_840,
-    priceTon: 0.00000784,
-    holders: 528,
-    volumeTon: 936,
-    progressPercent: 10.82,
-    accentHue: 228,
-  },
-  {
-    rank: 5,
-    name: 'Ice Hamster',
-    ticker: 'IHAM',
-    address: 'EQB5memeLaunchpadTopToken000000000000000005',
-    creatorAddress: 'UQB5creatorLaunchpad000000000000000000005',
-    imageUrl: fallbackMemeImageUrl(5),
-    marketCapTon: 6_420,
-    priceTon: 0.00000642,
-    holders: 471,
-    volumeTon: 804,
-    progressPercent: 9.36,
-    accentHue: 196,
-  },
-  {
-    rank: 6,
-    name: 'Moon Toast',
-    ticker: 'MTOAST',
-    address: 'EQB6memeLaunchpadTopToken000000000000000006',
-    creatorAddress: 'UQB6creatorLaunchpad000000000000000000006',
-    imageUrl: fallbackMemeImageUrl(6),
-    marketCapTon: 5_380,
-    priceTon: 0.00000538,
-    holders: 389,
-    volumeTon: 692,
-    progressPercent: 7.74,
-    accentHue: 244,
-  },
-  {
-    rank: 7,
-    name: 'Pixel Whale',
-    ticker: 'PWHALE',
-    address: 'EQB7memeLaunchpadTopToken000000000000000007',
-    creatorAddress: 'UQB7creatorLaunchpad000000000000000000007',
-    imageUrl: fallbackMemeImageUrl(7),
-    marketCapTon: 4_260,
-    priceTon: 0.00000426,
-    holders: 312,
-    volumeTon: 548,
-    progressPercent: 6.18,
-    accentHue: 214,
-  },
-];
-
-const FALLBACK_RECENT_ACTIVITY: RecentActivityItem[] = [
-  {
-    id: 'fallback-buy-tonk',
-    type: 'buy',
-    tokenName: 'Tonked Inu',
-    ticker: 'TONK',
-    amountLabel: '2.4 TON',
-    userLabel: 'UQB1cr...00001',
-    timeLabel: 'just now',
-    accentHue: 210,
-    timestampMs: Date.now(),
-  },
-  {
-    id: 'fallback-launch-dfrog',
-    type: 'launch',
-    tokenName: 'Diamond Frog',
-    ticker: 'DFROG',
-    amountLabel: 'new token',
-    userLabel: 'UQB4cr...00004',
-    timeLabel: '2m ago',
-    accentHue: 228,
-    timestampMs: Date.now() - 120_000,
-  },
-  {
-    id: 'fallback-sell-rocat',
-    type: 'sell',
-    tokenName: 'Rocket Cat',
-    ticker: 'ROCAT',
-    amountLabel: '0.8 TON',
-    userLabel: 'UQB2cr...00002',
-    timeLabel: '4m ago',
-    accentHue: 254,
-    timestampMs: Date.now() - 240_000,
-  },
-  {
-    id: 'fallback-buy-bpepe',
-    type: 'buy',
-    tokenName: 'Blue Pepe',
-    ticker: 'BPEPE',
-    amountLabel: '1.7 TON',
-    userLabel: 'UQB3cr...00003',
-    timeLabel: '6m ago',
-    accentHue: 188,
-    timestampMs: Date.now() - 360_000,
-  },
-];
 
 function shortWallet(address: string) {
   return address.length < 12 ? address : `${address.slice(0, 4)}...${address.slice(-4)}`;
@@ -393,8 +233,12 @@ function buildRecentActivity(tokens: TokenRow[], trades: RecentTradeRow[]) {
   }
 
   const tradeItems = trades
-    .filter((trade) => trade.type === 'buy' || trade.type === 'sell')
+    .filter((trade) => {
+      const tradeType = String(trade.type || '').toLowerCase();
+      return tradeType === 'buy' || tradeType === 'sell';
+    })
     .map((trade, index): RecentActivityItem => {
+      const tradeType = String(trade.type || '').toLowerCase();
       const token = trade.token_address ? tokenMap.get(trade.token_address) : undefined;
       const tokenName = token?.name?.trim() || 'Unknown meme';
       const ticker = (token?.symbol?.trim() || 'UNK').toUpperCase();
@@ -402,11 +246,11 @@ function buildRecentActivity(tokens: TokenRow[], trades: RecentTradeRow[]) {
 
       return {
         id: `trade-${trade.timestamp || index}-${trade.token_address || ticker}`,
-        type: trade.type === 'sell' ? 'sell' : 'buy',
+        type: tradeType === 'sell' ? 'sell' : 'buy',
         tokenName,
         ticker,
         amountLabel: formatNanoTonAmount(trade.ton_amount),
-        userLabel: shortAddress(trade.user_address || ''),
+        userLabel: shortAddress(trade.trader_address || trade.user_address || ''),
         timeLabel: formatTimeAgo(trade.timestamp),
         accentHue: tokenAccentHue({ name: tokenName, ticker }),
         timestampMs: Number.isFinite(timestampMs) ? timestampMs : Date.now() - index,
@@ -452,7 +296,8 @@ function buildTopMemes(tokens: TokenRow[], trades: MemeTradeRow[]) {
     };
 
     current.volumeNano += parseNano(trade.ton_amount);
-    if (trade.user_address) current.holders.add(trade.user_address);
+    const holder = trade.trader_address || trade.user_address;
+    if (holder) current.holders.add(holder);
     tradeStats.set(trade.token_address, current);
   }
 
@@ -495,7 +340,7 @@ function buildTopMemes(tokens: TokenRow[], trades: MemeTradeRow[]) {
     .map((meme, index) => ({
       ...meme,
       rank: index + 1,
-      imageUrl: meme.imageUrl ?? fallbackMemeImageUrl(index + 1),
+      imageUrl: meme.imageUrl,
     }));
 
   return rankedMemes;
@@ -711,6 +556,15 @@ function MemeCard({
 }
 
 function RecentActivityTicker({ items }: { items: RecentActivityItem[] }) {
+  if (items.length === 0) {
+    return (
+      <div className="recent-activity-shelf" aria-label="Recent launchpad activity">
+        <div className="dashboard-shelf-ridge recent-activity-ridge" aria-hidden="true" />
+        <div className="recent-activity-empty">Waiting for live launches and trades.</div>
+      </div>
+    );
+  }
+
   const tickerItems = items;
   const loopItems = [...tickerItems, ...tickerItems, ...tickerItems];
 
@@ -780,7 +634,7 @@ export default function Home() {
 
         if (!cancelled) setStats(nextStats);
       } catch {
-        if (!cancelled) setStats(null);
+        // Keep the last good stats snapshot instead of zeroing the UI.
       }
     }
 
@@ -794,7 +648,7 @@ export default function Home() {
             .limit(50),
           supabase
             .from('trades')
-            .select('token_address, ton_amount, token_amount, user_address, type, timestamp')
+            .select('token_address, ton_amount, token_amount, trader_address, user_address, type, timestamp')
             .order('timestamp', { ascending: false })
             .limit(5000),
         ]);
@@ -807,10 +661,7 @@ export default function Home() {
           setRecentActivity(buildRecentActivity(tokenRows, tradeRows.slice(0, 40)));
         }
       } catch {
-        if (!cancelled) {
-          setTopMemes(FALLBACK_TOP_MEMES);
-          setRecentActivity(FALLBACK_RECENT_ACTIVITY);
-        }
+        // Keep the last good activity snapshot. No mock fallbacks.
       }
     }
 
@@ -878,11 +729,7 @@ export default function Home() {
           <TopbarNav />
         </div>
         <div className="topbar-actions">
-          <label className="dashboard-search" aria-label="Search">
-            <Search aria-hidden="true" size={13} strokeWidth={2.25} />
-            <input type="search" placeholder="Search" />
-            <kbd>⌘ K</kbd>
-          </label>
+          <TopbarSearch />
           <span className="topbar-slash" aria-hidden="true">/</span>
           <button type="button" className="notification-button" aria-label="Notifications">
             <Bell aria-hidden="true" size={14} strokeWidth={2.4} />

@@ -3,9 +3,10 @@
 import { LineChart, Scrubber } from '@coinbase/cds-web-visualization/chart';
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import { Address } from '@ton/core';
-import { Bell, Moon, Search, Sun } from 'lucide-react';
+import { Bell, Check, ChevronDown, Moon, Sun } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { TopbarSearch } from '../../TopbarSearch';
 import { TopbarNav } from '../../TopbarNav';
 import { useThemeMode } from '../../providers';
 import {
@@ -93,16 +94,6 @@ const TRADE_SIZE_FILTERS = [
   { id: '1', label: '1+ TON', minTon: 1 },
 ];
 
-const fallbackImages = [
-  '/memes/tonk-batcat.jpg',
-  '/memes/rocket-cat.png',
-  '/memes/blue-pepe.png',
-  '/memes/diamond-frog.png',
-  '/memes/ice-hamster.png',
-  '/memes/moon-toast.jpg',
-  '/memes/pixel-whale.png',
-];
-
 const TON_USD_PRICE = 2.454;
 const NANOS_PER_UNIT_LOCAL = 1_000_000_000n;
 const TOTAL_SUPPLY_NANO = 1_000_000_000n * NANOS_PER_UNIT_LOCAL;
@@ -187,20 +178,18 @@ async function fetchJettonBalance(master: string, owner: string): Promise<{ bala
   return { balance: data.balance, walletAddress: data.walletAddress };
 }
 
-function getTokenImage(token: Pick<TokenDetailToken, 'imageUrl'>, index = 0) {
-  return token.imageUrl || fallbackImages[index % fallbackImages.length];
+function getTokenImage(token: Pick<TokenDetailToken, 'imageUrl'>) {
+  return token.imageUrl;
 }
 
 function TokenImage({
   token,
-  index,
   className = '',
 }: {
   token: TokenDetailToken;
-  index?: number;
   className?: string;
 }) {
-  const imageUrl = getTokenImage(token, index);
+  const imageUrl = getTokenImage(token);
 
   return (
     <div className={`token-detail-image-shell ${className}`}>
@@ -235,11 +224,7 @@ function TokenTopbar() {
         <TopbarNav />
       </div>
       <div className="topbar-actions">
-        <label className="dashboard-search" aria-label="Search">
-          <Search aria-hidden="true" size={13} strokeWidth={2.25} />
-          <input type="search" placeholder="Search" />
-          <kbd>Ctrl K</kbd>
-        </label>
+          <TopbarSearch />
         <span className="topbar-slash" aria-hidden="true">/</span>
         <button type="button" className="notification-button" aria-label="Notifications">
           <Bell aria-hidden="true" size={14} strokeWidth={2.4} />
@@ -265,6 +250,68 @@ function TokenTopbar() {
         >
           <span>{wallet ? shortWallet(wallet.account.address) : 'Connect'}</span>
         </button>
+      </div>
+    </div>
+  );
+}
+
+function TradeFilterDropdown({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (nextValue: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const activeOption = options.find((option) => option.value === value) || options[0];
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  return (
+    <div className={`token-detail-filter ${open ? 'is-open' : ''}`} ref={rootRef}>
+      <span>{label}</span>
+      <button
+        type="button"
+        className="token-detail-filter-button"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <strong>{activeOption?.label || label}</strong>
+        <ChevronDown aria-hidden="true" size={14} strokeWidth={2.6} />
+      </button>
+      <div className="token-detail-filter-menu" role="listbox">
+        {options.map((option) => (
+          <button
+            type="button"
+            key={option.value}
+            className={option.value === value ? 'is-active' : undefined}
+            onClick={() => {
+              onChange(option.value);
+              setOpen(false);
+            }}
+          >
+            <span>{option.label}</span>
+            {option.value === value ? <Check aria-hidden="true" size={14} strokeWidth={2.8} /> : null}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -682,8 +729,8 @@ export default function TokenDetailPage() {
           <div className="dashboard-shelf-ridge token-detail-ridge" aria-hidden="true" />
 
           {loading && (
-            <div className="token-detail-state-card">
-              <strong>Loading token</strong>
+            <div className="token-detail-state-card token-detail-loading-card">
+              <div className="token-detail-loader" aria-hidden="true" />
               <span>Fetching launchpad stats and trades.</span>
             </div>
           )}
@@ -797,21 +844,24 @@ export default function TokenDetailPage() {
                       <strong>{compactNumber(liveTrades.length)} fills</strong>
                     </div>
                     <div className="token-detail-live-trade-controls">
-                      <label>
-                        <span>Sort</span>
-                        <select value={tradeSort} onChange={(event) => setTradeSort(event.target.value as 'newest' | 'oldest')}>
-                          <option value="newest">Newest</option>
-                          <option value="oldest">Oldest</option>
-                        </select>
-                      </label>
-                      <label>
-                        <span>Size</span>
-                        <select value={tradeSizeFilter} onChange={(event) => setTradeSizeFilter(event.target.value)}>
-                          {TRADE_SIZE_FILTERS.map((filter) => (
-                            <option value={filter.id} key={filter.id}>{filter.label}</option>
-                          ))}
-                        </select>
-                      </label>
+                      <TradeFilterDropdown
+                        label="Sort"
+                        value={tradeSort}
+                        onChange={(nextValue) => setTradeSort(nextValue as 'newest' | 'oldest')}
+                        options={[
+                          { value: 'newest', label: 'Newest' },
+                          { value: 'oldest', label: 'Oldest' },
+                        ]}
+                      />
+                      <TradeFilterDropdown
+                        label="Size"
+                        value={tradeSizeFilter}
+                        onChange={setTradeSizeFilter}
+                        options={TRADE_SIZE_FILTERS.map((filter) => ({
+                          value: filter.id,
+                          label: filter.label,
+                        }))}
+                      />
                     </div>
                   </header>
                   <div className="token-detail-live-trades-table">

@@ -1,11 +1,13 @@
 'use client';
 
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
-import { Bell, Coins, Moon, Search, Sun, Wallet } from 'lucide-react';
+import { Bell, Coins, Moon, Sun, Wallet } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { NumberTicker } from '../NumberTicker';
 import { PixelGridShader } from '../PixelGridShader';
 import { TopbarNav } from '../TopbarNav';
+import { TopbarSearch } from '../TopbarSearch';
 import { useThemeMode } from '../providers';
 import { subscribeLaunchpadEvents } from '@/lib/liveEvents';
 import { supabase } from '@/lib/supabase';
@@ -86,16 +88,6 @@ type PortfolioResponse = {
   recentTrades: PortfolioTrade[];
 };
 
-const fallbackImages = [
-  '/memes/tonk-batcat.jpg',
-  '/memes/rocket-cat.png',
-  '/memes/blue-pepe.png',
-  '/memes/diamond-frog.png',
-  '/memes/ice-hamster.png',
-  '/memes/moon-toast.jpg',
-  '/memes/pixel-whale.png',
-];
-
 function shortWallet(address: string) {
   return address.length < 12 ? address : `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
@@ -136,6 +128,25 @@ function formatTimeAgo(value: string | null) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function PortfolioSummaryNumber({
+  value,
+  prefix = '',
+  decimalPlaces = 0,
+  className = '',
+}: {
+  value: number;
+  prefix?: string;
+  decimalPlaces?: number;
+  className?: string;
+}) {
+  return (
+    <span className={`portfolio-summary-number ${className}`.trim()}>
+      {prefix}
+      <NumberTicker className="portfolio-summary-number-value" decimalPlaces={decimalPlaces} value={Number.isFinite(value) ? value : 0} />
+    </span>
+  );
+}
+
 function PortfolioTopbar() {
   const [tonConnectUI] = useTonConnectUI();
   const wallet = useTonWallet();
@@ -149,11 +160,7 @@ function PortfolioTopbar() {
         <TopbarNav />
       </div>
       <div className="topbar-actions">
-        <label className="dashboard-search" aria-label="Search">
-          <Search aria-hidden="true" size={13} strokeWidth={2.25} />
-          <input type="search" placeholder="Search" />
-          <kbd>Ctrl K</kbd>
-        </label>
+          <TopbarSearch />
         <span className="topbar-slash" aria-hidden="true">/</span>
         <button type="button" className="notification-button" aria-label="Notifications">
           <Bell aria-hidden="true" size={14} strokeWidth={2.4} />
@@ -184,8 +191,8 @@ function PortfolioTopbar() {
   );
 }
 
-function TokenThumb({ token, index }: { token: PortfolioToken; index: number }) {
-  const imageUrl = token.imageUrl || fallbackImages[index % fallbackImages.length];
+function TokenThumb({ token }: { token: PortfolioToken }) {
+  const imageUrl = token.imageUrl;
   return imageUrl ? (
     <img
       alt=""
@@ -199,7 +206,7 @@ function TokenThumb({ token, index }: { token: PortfolioToken; index: number }) 
   );
 }
 
-function HoldingThumb({ holding, index }: { holding: WalletHolding; index: number }) {
+function HoldingThumb({ holding }: { holding: WalletHolding }) {
   if (holding.token.isNative) {
     return (
       <div className="portfolio-native-token-mark" aria-hidden="true">
@@ -208,7 +215,7 @@ function HoldingThumb({ holding, index }: { holding: WalletHolding; index: numbe
     );
   }
 
-  const imageUrl = holding.token.imageUrl || fallbackImages[index % fallbackImages.length];
+  const imageUrl = holding.token.imageUrl;
   return imageUrl ? (
     <img
       alt=""
@@ -222,7 +229,7 @@ function HoldingThumb({ holding, index }: { holding: WalletHolding; index: numbe
   );
 }
 
-function HoldingRow({ holding, index }: { holding: WalletHolding; index: number }) {
+function HoldingRow({ holding }: { holding: WalletHolding }) {
   const router = useRouter();
   const token = holding.launchpadToken;
   const openToken = () => {
@@ -241,7 +248,7 @@ function HoldingRow({ holding, index }: { holding: WalletHolding; index: number 
     >
       <div className="portfolio-row-token">
         <div className="portfolio-row-image">
-          <HoldingThumb holding={holding} index={index} />
+          <HoldingThumb holding={holding} />
         </div>
         <div>
           <strong>{holding.token.name}</strong>
@@ -255,7 +262,7 @@ function HoldingRow({ holding, index }: { holding: WalletHolding; index: number 
   );
 }
 
-function CreatedTokenRow({ token, index, tonUsd }: { token: PortfolioToken; index: number; tonUsd: number }) {
+function CreatedTokenRow({ token, tonUsd }: { token: PortfolioToken; tonUsd: number }) {
   const router = useRouter();
   const openToken = () => router.push(`/tokens/${encodeURIComponent(token.address)}`);
 
@@ -272,7 +279,7 @@ function CreatedTokenRow({ token, index, tonUsd }: { token: PortfolioToken; inde
     >
       <div className="portfolio-row-token">
         <div className="portfolio-row-image">
-          <TokenThumb token={token} index={index} />
+          <TokenThumb token={token} />
         </div>
         <div>
           <strong>{token.name}</strong>
@@ -405,20 +412,27 @@ export default function PortfolioPage() {
               </div>
               <div className="portfolio-stat-cell portfolio-stat-primary">
                 <span>Portfolio value</span>
-                <strong>{formatUsd(data?.summary.holdingsValueUsd || 0)}</strong>
+                <strong>
+                  <PortfolioSummaryNumber
+                    className="is-positive"
+                    decimalPlaces={2}
+                    prefix="$"
+                    value={data?.summary.holdingsValueUsd || 0}
+                  />
+                </strong>
                 <small>{formatTon(data?.summary.nativeTonBalance || 0, { maximumFractionDigits: 4 })} @ {tonUsd ? formatUsd(tonUsd) : '--'}</small>
               </div>
               <div className="portfolio-stat-cell">
                 <span>Total tokens created</span>
-                <strong>{compactNumber(data?.summary.createdCount || 0)}</strong>
+                <strong><PortfolioSummaryNumber value={data?.summary.createdCount || 0} /></strong>
               </div>
               <div className="portfolio-stat-cell">
                 <span>Tokens held</span>
-                <strong>{compactNumber(data?.summary.holdingsCount || 0)}</strong>
+                <strong><PortfolioSummaryNumber value={data?.summary.holdingsCount || 0} /></strong>
               </div>
               <div className="portfolio-stat-cell">
                 <span>Tokens traded</span>
-                <strong>{compactNumber(data?.summary.tradedCount || 0)}</strong>
+                <strong><PortfolioSummaryNumber value={data?.summary.tradedCount || 0} /></strong>
               </div>
             </section>
 
@@ -435,8 +449,8 @@ export default function PortfolioPage() {
                   <span>Price</span>
                 </div>
                 <div className="portfolio-table-list">
-                  {data?.walletHoldings.length ? data.walletHoldings.map((holding, index) => (
-                    <HoldingRow holding={holding} index={index} key={`${holding.token.address}-${index}`} />
+                  {data?.walletHoldings.length ? data.walletHoldings.map((holding) => (
+                    <HoldingRow holding={holding} key={holding.token.address} />
                   )) : (
                     <p>{loading ? 'Loading holdings...' : 'No TON or jetton holdings found for this wallet yet.'}</p>
                   )}
@@ -455,8 +469,8 @@ export default function PortfolioPage() {
                   <span>Bonding</span>
                 </div>
                 <div className="portfolio-table-list">
-                  {data?.createdTokens.length ? data.createdTokens.map((token, index) => (
-                    <CreatedTokenRow token={token} index={index} key={token.address} tonUsd={tonUsd} />
+                  {data?.createdTokens.length ? data.createdTokens.map((token) => (
+                    <CreatedTokenRow token={token} key={token.address} tonUsd={tonUsd} />
                   )) : (
                     <p>No tokens created from this wallet.</p>
                   )}

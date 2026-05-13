@@ -1,12 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import {
   Bell,
   Link,
   Moon,
-  Search,
   Send,
   Sun,
   UploadCloud,
@@ -14,6 +13,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { DitheredSwirl } from '../DitheredSwirl';
 import { TopbarNav } from '../TopbarNav';
+import { TopbarSearch } from '../TopbarSearch';
 import { useThemeMode } from '../providers';
 import { DEFAULT_DEPLOY_VALUE, TONCONNECT_TESTNET_CHAIN, deployTokenBody } from '@/lib/launchpad';
 import { supabase } from '@/lib/supabase';
@@ -38,20 +38,45 @@ async function loadLaunchpadConfig(): Promise<{ factoryAddress: string }> {
   return { factoryAddress: data.factoryAddress };
 }
 
-async function findIndexedToken(metadataUrl: string): Promise<string | null> {
-  const { data, error } = await supabase
+async function findIndexedToken(
+  metadataUrl: string,
+  creatorAddress: string,
+  earliestTimestampMs: number,
+): Promise<string | null> {
+  const { data: metadataMatch, error: metadataError } = await supabase
     .from('tokens')
-    .select('address')
+    .select('address, creator_address, metadata_url, created_at')
     .eq('metadata_url', metadataUrl)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (error) return null;
-  return typeof data?.address === 'string' ? data.address : null;
+  if (!metadataError && typeof metadataMatch?.address === 'string') return metadataMatch.address;
+
+  const { data: recentTokens, error: creatorError } = await supabase
+    .from('tokens')
+    .select('address, creator_address, metadata_url, created_at')
+    .eq('creator_address', creatorAddress)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (creatorError) return null;
+
+  const match = (recentTokens || []).find((token) => {
+    if (typeof token.address !== 'string') return false;
+    if (token.metadata_url === metadataUrl) return true;
+    const createdAtMs = token.created_at ? new Date(token.created_at).getTime() : NaN;
+    return Number.isFinite(createdAtMs) && createdAtMs >= earliestTimestampMs - 120_000;
+  });
+
+  return typeof match?.address === 'string' ? match.address : null;
 }
 
-function waitForIndexedToken(metadataUrl: string, queryId: bigint): Promise<string> {
+function waitForIndexedToken(
+  metadataUrl: string,
+  creatorAddress: string,
+  earliestTimestampMs: number,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let channel: ReturnType<typeof supabase.channel> | null = null;
@@ -70,22 +95,27 @@ function waitForIndexedToken(metadataUrl: string, queryId: bigint): Promise<stri
     };
 
     const checkNow = async () => {
-      const address = await findIndexedToken(metadataUrl);
+      const address = await findIndexedToken(metadataUrl, creatorAddress, earliestTimestampMs);
       if (address) resolveOnce(address);
     };
 
     channel = supabase
-      .channel(`create-token-${queryId.toString()}`)
+      .channel(`create-token-${creatorAddress}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'tokens',
-          filter: `metadata_url=eq.${metadataUrl}`,
         },
         (payload) => {
-          const row = payload.new as { address?: string };
+          const row = payload.new as { address?: string; metadata_url?: string | null; creator_address?: string | null; created_at?: string | null };
+          const createdAtMs = row.created_at ? new Date(row.created_at).getTime() : NaN;
+          const matchesMetadata = row.metadata_url === metadataUrl;
+          const matchesCreator = row.creator_address === creatorAddress
+            && Number.isFinite(createdAtMs)
+            && createdAtMs >= earliestTimestampMs - 120_000;
+          if (!matchesMetadata && !matchesCreator) return;
           if (row.address) resolveOnce(row.address);
         },
       )
@@ -97,8 +127,8 @@ function waitForIndexedToken(metadataUrl: string, queryId: bigint): Promise<stri
     timers.push(window.setTimeout(() => {
       if (settled) return;
       cleanup();
-      reject(new Error('Timed out waiting for the indexer. The token may still appear shortly on the tokens page.'));
-    }, 120_000));
+      reject(new Error('The launch was sent, but the token is still indexing.'));
+    }, 45_000));
     void checkNow();
   });
 }
@@ -115,9 +145,25 @@ export default function CreateToken() {
   const [telegramLink, setTelegramLink] = useState('');
   const [websiteLink, setWebsiteLink] = useState('');
   const [iconFile, setIconFile] = useState<File | null>(null);
+  const [iconPreviewUrl, setIconPreviewUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!iconFile) {
+      setIconPreviewUrl(null);
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(iconFile);
+    setIconPreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [iconFile]);
+
+  function handleIconSelection(file: File | null) {
+    setIconFile(file);
+  }
 
   async function handleCreateToken() {
     if (!wallet) {
@@ -162,6 +208,7 @@ export default function CreateToken() {
       const queryId = BigInt(Date.now());
       const body = deployTokenBody(queryId, uploadData.metadataUrl);
       const { factoryAddress } = await loadLaunchpadConfig();
+      const submittedAt = Date.now();
 
       setStatusMessage('Confirm token launch in your wallet...');
       await tonConnectUI.sendTransaction({
@@ -174,10 +221,14 @@ export default function CreateToken() {
         }],
       });
 
-      setStatusMessage('Transaction sent. Waiting for indexer confirmation...');
-      const matchedAddress = await waitForIndexedToken(uploadData.metadataUrl, queryId);
+      setStatusMessage('Finalizing launch...');
+      const matchedAddress = await waitForIndexedToken(
+        uploadData.metadataUrl,
+        wallet.account.address,
+        submittedAt,
+      ).catch(() => null);
 
-      router.push(`/tokens/${encodeURIComponent(matchedAddress)}`);
+      router.push(matchedAddress ? `/tokens/${encodeURIComponent(matchedAddress)}` : '/tokens');
     } catch (error) {
       setErrorMessage(formatUserError(error, 'Unable to create token.'));
       setStatusMessage(null);
@@ -195,11 +246,7 @@ export default function CreateToken() {
           <TopbarNav />
         </div>
         <div className="topbar-actions">
-          <label className="dashboard-search" aria-label="Search">
-            <Search aria-hidden="true" size={13} strokeWidth={2.25} />
-            <input type="search" placeholder="Search" />
-            <kbd>Ctrl K</kbd>
-          </label>
+          <TopbarSearch />
           <span className="topbar-slash" aria-hidden="true">/</span>
           <button type="button" className="notification-button" aria-label="Notifications">
             <Bell aria-hidden="true" size={14} strokeWidth={2.4} />
@@ -256,19 +303,23 @@ export default function CreateToken() {
             </header>
 
             <div className="launch-card-body">
-              <label className="launch-icon-upload-row">
+              <label className={`launch-icon-upload-row${iconFile ? ' has-file' : ''}`}>
                 <input
                   type="file"
                   accept="image/*"
                   aria-label="Upload token icon"
-                  onChange={(event) => setIconFile(event.target.files?.[0] ?? null)}
+                  onChange={(event) => handleIconSelection(event.target.files?.[0] ?? null)}
                 />
                 <span className="launch-token-icon-box" aria-hidden="true">
-                  <UploadCloud size={18} strokeWidth={2.4} />
+                  {iconPreviewUrl ? (
+                    <img src={iconPreviewUrl} alt="" className="launch-token-icon-preview" />
+                  ) : (
+                    <UploadCloud size={18} strokeWidth={2.4} />
+                  )}
                 </span>
                 <span className="launch-upload-copy">
-                  <strong>Upload token icon</strong>
-                  <small>Add an image to make it easy for users to find your token.</small>
+                  <strong>{iconFile ? 'Token image selected' : 'Upload token icon'}</strong>
+                  <small>{iconFile?.name || 'Add an image to make it easy for users to find your token.'}</small>
                 </span>
               </label>
 
@@ -302,11 +353,28 @@ export default function CreateToken() {
                 />
               </label>
 
-              <label className="launch-banner-upload">
-                <input type="file" accept="image/*" aria-label="Upload token banner" />
-                <UploadCloud aria-hidden="true" size={19} strokeWidth={2.35} />
-                <strong><span>Click to upload</span> or drag and drop it here.</strong>
-                <small>Only PNG and JPEG files. Up to 50MB.</small>
+              <label className={`launch-banner-upload${iconFile ? ' has-file' : ''}`}>
+                <input
+                  type="file"
+                  accept="image/*"
+                  aria-label="Upload token image"
+                  onChange={(event) => handleIconSelection(event.target.files?.[0] ?? null)}
+                />
+                {iconPreviewUrl ? (
+                  <div className="launch-banner-preview">
+                    <img src={iconPreviewUrl} alt="" />
+                    <div>
+                      <strong><span>Selected image</span> {iconFile?.name || ''}</strong>
+                      <small>Click again to replace it.</small>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <UploadCloud aria-hidden="true" size={19} strokeWidth={2.35} />
+                    <strong><span>Click to upload</span> or drag and drop it here.</strong>
+                    <small>Only PNG and JPEG files. Up to 50MB.</small>
+                  </>
+                )}
               </label>
 
               <div className="launch-social-section">

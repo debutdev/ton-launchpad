@@ -48,11 +48,34 @@ function shortSortValue(value: string | null | undefined) {
   return (value || '').trim().toLowerCase();
 }
 
+function tokenSearchScore(
+  token: ReturnType<typeof normalizeTokenRow>,
+  query: string,
+) {
+  if (!query) return 0;
+
+  const address = shortSortValue(token.address);
+  const name = shortSortValue(token.name);
+  const ticker = shortSortValue(token.ticker);
+  const creator = shortSortValue(token.creatorAddress);
+
+  if (address === query || ticker === query || name === query) return 100;
+  if (ticker.startsWith(query)) return 80;
+  if (name.startsWith(query)) return 60;
+  if (address.startsWith(query)) return 50;
+  if (ticker.includes(query)) return 40;
+  if (name.includes(query)) return 30;
+  if (address.includes(query)) return 20;
+  if (creator.includes(query)) return 10;
+  return -1;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
   const sort = normalizeSort(url.searchParams.get('sort'));
   const direction = normalizeDirection(url.searchParams.get('direction'));
+  const query = shortSortValue(url.searchParams.get('q'));
 
   const { data: tokenRows, error: tokenError } = await supabase
     .from('tokens')
@@ -63,19 +86,27 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: tokenError.message }, { status: 500 });
   }
 
-  const tokens = ((tokenRows || []) as unknown as DbTokenRow[]).map((token) => normalizeTokenRow(token));
+  const tokens = ((tokenRows || []) as unknown as DbTokenRow[])
+    .map((token) => normalizeTokenRow(token))
+    .map((token) => ({ token, searchScore: tokenSearchScore(token, query) }))
+    .filter((entry) => !query || entry.searchScore >= 0);
+
   tokens.sort((a, b) => {
+    if (query && a.searchScore !== b.searchScore) return b.searchScore - a.searchScore;
+
+    const left = a.token;
+    const right = b.token;
     let result = 0;
-    if (sort === 'marketCap') result = a.marketCapTon - b.marketCapTon;
-    if (sort === 'price') result = a.priceTon - b.priceTon;
-    if (sort === 'name') result = shortSortValue(a.name).localeCompare(shortSortValue(b.name));
-    if (sort === 'time') result = new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+    if (sort === 'marketCap') result = left.marketCapTon - right.marketCapTon;
+    if (sort === 'price') result = left.priceTon - right.priceTon;
+    if (sort === 'name') result = shortSortValue(left.name).localeCompare(shortSortValue(right.name));
+    if (sort === 'time') result = new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime();
     return direction === 'asc' ? result : -result;
   });
 
   const total = tokens.length;
   const start = (page - 1) * PAGE_SIZE;
-  const pageItems = tokens.slice(start, start + PAGE_SIZE);
+  const pageItems = tokens.slice(start, start + PAGE_SIZE).map((entry) => entry.token);
   const tokenAddresses = pageItems.map((token) => token.address);
   const tradeStats = new Map<string, { volumeNano: bigint; holders: Set<string> }>();
 

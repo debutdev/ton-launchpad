@@ -13,6 +13,7 @@ type TradeRow = {
 
 const NANOS_PER_TON = 1_000_000_000n;
 const TRADE_PAGE_SIZE = 1000;
+const FALLBACK_TON_USD = 2.454;
 
 function parseNanoTon(value: string | null): bigint {
   if (!value) return 0n;
@@ -35,22 +36,21 @@ function formatTon(nanotons: bigint): string {
 }
 
 async function getTonUsdPrice() {
-  const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT', {
-    cache: 'no-store',
-  });
+  try {
+    const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT', {
+      cache: 'no-store',
+    });
 
-  if (!response.ok) {
-    throw new Error(`Binance price request failed: ${response.status}`);
+    if (!response.ok) {
+      return FALLBACK_TON_USD;
+    }
+
+    const data = await response.json() as { price?: string };
+    const price = Number(data.price);
+    return Number.isFinite(price) && price > 0 ? price : FALLBACK_TON_USD;
+  } catch {
+    return FALLBACK_TON_USD;
   }
-
-  const data = await response.json() as { price?: string };
-  const price = Number(data.price);
-
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error('Binance returned an invalid TON price');
-  }
-
-  return price;
 }
 
 export async function GET() {
@@ -90,8 +90,9 @@ export async function GET() {
 
     for (const trade of trades) {
       const amount = parseNanoTon(trade.ton_amount);
-      if (trade.type === 'buy') buyVolumeNano += amount;
-      if (trade.type === 'sell') sellVolumeNano += amount;
+      const tradeType = String(trade.type || '').toLowerCase();
+      if (tradeType === 'buy') buyVolumeNano += amount;
+      if (tradeType === 'sell') sellVolumeNano += amount;
     }
 
     if (trades.length < TRADE_PAGE_SIZE) break;

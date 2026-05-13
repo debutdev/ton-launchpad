@@ -2,10 +2,11 @@
 
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import { RollingNumber } from '@coinbase/cds-web/numbers/RollingNumber';
-import { Bell, Moon, Search, Sun } from 'lucide-react';
+import { Bell, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { TopbarNav } from '../TopbarNav';
+import { TopbarSearch } from '../TopbarSearch';
 import { useThemeMode } from '../providers';
 import { subscribeLaunchpadEvents } from '@/lib/liveEvents';
 import { supabase } from '@/lib/supabase';
@@ -46,16 +47,6 @@ const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
   { value: 'price', label: 'Price' },
   { value: 'name', label: 'Name' },
   { value: 'time', label: 'Time launched' },
-];
-
-const fallbackImages = [
-  '/memes/tonk-batcat.jpg',
-  '/memes/rocket-cat.png',
-  '/memes/blue-pepe.png',
-  '/memes/diamond-frog.png',
-  '/memes/ice-hamster.png',
-  '/memes/moon-toast.jpg',
-  '/memes/pixel-whale.png',
 ];
 
 function shortWallet(address: string) {
@@ -149,13 +140,11 @@ function MemeMetricNumber({
 
 function TokenDirectoryCard({
   token,
-  index,
 }: {
   token: TokenDirectoryItem;
-  index: number;
 }) {
   const router = useRouter();
-  const imageUrl = token.imageUrl || fallbackImages[index % fallbackImages.length];
+  const imageUrl = token.imageUrl;
   const tokenHref = `/tokens/${encodeURIComponent(token.address)}`;
 
   function openTokenDetail() {
@@ -414,11 +403,7 @@ export default function TokensPage() {
           <TopbarNav />
         </div>
         <div className="topbar-actions">
-          <label className="dashboard-search" aria-label="Search">
-            <Search aria-hidden="true" size={13} strokeWidth={2.25} />
-            <input type="search" placeholder="Search" />
-            <kbd>Ctrl K</kbd>
-          </label>
+          <TopbarSearch />
           <span className="topbar-slash" aria-hidden="true">/</span>
           <button type="button" className="notification-button" aria-label="Notifications">
             <Bell aria-hidden="true" size={14} strokeWidth={2.4} />
@@ -526,9 +511,8 @@ export default function TokensPage() {
           </header>
 
           <div className="tokens-directory-grid" aria-busy={loading}>
-            {data.items.map((token, index) => (
+            {data.items.map((token) => (
               <TokenDirectoryCard
-                index={index}
                 key={token.address}
                 token={token}
               />
