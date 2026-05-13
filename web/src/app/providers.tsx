@@ -101,7 +101,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           {mounted ? (
             <TonConnectUIProvider
               manifestUrl={manifestUrl}
-              restoreConnection={false}
+              restoreConnection
               actionsConfiguration={{ returnStrategy: 'back' }}
             >
               {children}
