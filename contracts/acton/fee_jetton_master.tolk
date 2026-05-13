@@ -6,6 +6,7 @@ struct MasterStorage {
     totalSupply: coins
     owner: address
     factory: address
+    tokenId: uint32
     platformWallet: address
     jettonContent: cell
     mintable: bool

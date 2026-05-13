@@ -13,7 +13,7 @@ type BuildArtifact = {
 
 const DEAD_ADDRESS = Address.parse('EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c');
 const START_MARKET_CAP_TON = 2037489812551n;
-const DEFAULT_TEST_MIGRATION_CAP = START_MARKET_CAP_TON + toNano('0.5');
+const DEFAULT_TEST_MIGRATION_CAP = START_MARKET_CAP_TON + toNano('4');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

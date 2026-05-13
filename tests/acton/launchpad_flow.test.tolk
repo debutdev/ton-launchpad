@@ -81,6 +81,7 @@ fun launchToken(
     owner: Treasury,
     queryId: uint64,
     expectedMigrationMarketCapTon: coins,
+    expectedTokenCount: int,
 ): (BondingCurve, FeeJettonMaster) {
     val res = factory.sendDeployToken(
         owner.address,
@@ -90,7 +91,7 @@ fun launchToken(
         { value: ton("0.7"), bounce: true },
     );
     expect(res).toHaveAllSuccessfulTxs();
-    expect(factory.getTokenCount()).toEqual(1);
+    expect(factory.getTokenCount()).toEqual(expectedTokenCount);
 
     val eventMsg = res.findExternalOutMessage<TokenDeployed>({ from: factory.address });
     expect(eventMsg).toBeNotNull();
@@ -125,7 +126,7 @@ fun setupFlowWithMigrationCap(migrationMarketCapTon: coins): FlowSetup {
         pton,
         lp,
     );
-    val (curve, master) = launchToken(factory, owner, 100, migrationMarketCapTon);
+    val (curve, master) = launchToken(factory, owner, 100, migrationMarketCapTon, 1);
 
     return FlowSetup { factory, curve, master, owner, alice, platform, router };
 }
@@ -177,10 +178,34 @@ get fun `test factory launches low cap token`() {
         pton,
         lp,
     );
-    val (curve, master) = launchToken(factory, owner, 1, LOW_TEST_MIGRATION_CAP);
+    val (curve, master) = launchToken(factory, owner, 1, LOW_TEST_MIGRATION_CAP, 1);
 
     expect(curve.getJettonMaster()).toEqual(master.address);
     expect(factory.getMigrationMarketCapTon()).toEqual(LOW_TEST_MIGRATION_CAP);
+}
+
+get fun `test duplicate metadata launches unique jetton masters`() {
+    val owner = testing.treasury("duplicate-owner");
+    val platform = testing.treasury("duplicate-platform");
+    val router = testing.treasury("duplicate-router");
+    val pton = testing.treasury("duplicate-pton");
+    val lp = testing.treasury("duplicate-lp");
+
+    val factory = deployFactory(
+        owner,
+        platform,
+        LOW_TEST_MIGRATION_CAP,
+        router,
+        pton,
+        lp,
+    );
+    val (curveA, masterA) = launchToken(factory, owner, 11, LOW_TEST_MIGRATION_CAP, 1);
+    val (curveB, masterB) = launchToken(factory, owner, 12, LOW_TEST_MIGRATION_CAP, 2);
+
+    expect(curveA.address != curveB.address).toBeTrue();
+    expect(masterA.address != masterB.address).toBeTrue();
+    expect(masterA.getJettonData().adminAddress).toEqual(curveA.address);
+    expect(masterB.getJettonData().adminAddress).toEqual(curveB.address);
 }
 
 get fun `test buy then sell sends two percent TON to platform`() {

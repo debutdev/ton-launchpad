@@ -35,6 +35,7 @@ struct MasterStorageData {
     totalSupply: coins
     owner: address
     factory: address
+    tokenId: uint32
     platformWallet: address
     jettonContent: cell
     mintable: bool
@@ -120,6 +121,7 @@ fun factoryWalletAddress(
 fun masterState(
     owner: address,
     factory: address,
+    tokenId: int,
     platformWallet: address,
     jettonContent: cell,
     walletCode: cell,
@@ -131,6 +133,7 @@ fun masterState(
             totalSupply: 0,
             owner,
             factory,
+            tokenId,
             platformWallet,
             jettonContent,
             mintable: true,
@@ -219,6 +222,7 @@ fun onInternalMessage(in: InMessage) {
             val jmState = masterState(
                 contract.getAddress(),
                 contract.getAddress(),
+                storage.tokenCount,
                 storage.platformWallet,
                 msg.jettonContent,
                 codeConfig.jettonWalletCode,
