@@ -777,7 +777,7 @@ export default function TokenDetailPage() {
 
               <div className="token-detail-side-column">
                 <aside
-                  className={`token-detail-trade-card token-detail-trade-card-${tradeSide}`}
+                  className={`token-detail-trade-card token-detail-trade-card-${tradeSide} token-detail-trade-card-combined`}
                   aria-label={`Trade ${token.name}`}
                 >
                   <div className="token-detail-trade-header">
@@ -891,21 +891,21 @@ export default function TokenDetailPage() {
                           : `${tradeSide === 'buy' ? 'Buy' : 'Sell'} $${token.ticker}`}
                     </span>
                   </button>
-                </aside>
 
-                <section className="token-detail-info-card" aria-label="Token stats">
-                  <div className="token-detail-stat-grid">
-                    <div><span>Name</span><strong>{token.name}</strong></div>
-                    <div><span>Symbol</span><strong>${token.ticker}</strong></div>
-                    <div><span>Network</span><strong>TON</strong></div>
-                    <div><span>Market Cap</span><strong>{formatTon(token.marketCapTon)}</strong></div>
-                    <div><span>Price</span><strong>{formatPrice(token.priceTon)}</strong></div>
-                    <div><span>Volume</span><strong>{formatTon(token.volumeTon)}</strong></div>
-                    <div><span>Holders</span><strong>{compactNumber(token.holders)}</strong></div>
-                    <div><span>Status</span><strong>{token.migrated ? 'STON.fi' : 'Bonding'}</strong></div>
-                    <div><span>Created</span><strong>{formatTimeAgo(token.createdAt)}</strong></div>
-                  </div>
-                </section>
+                  <section className="token-detail-inline-stats" aria-label="Token stats">
+                    <div className="token-detail-stat-grid">
+                      <div><span>Name</span><strong>{token.name}</strong></div>
+                      <div><span>Symbol</span><strong>${token.ticker}</strong></div>
+                      <div><span>Network</span><strong>TON</strong></div>
+                      <div><span>Market Cap</span><strong>{formatTon(token.marketCapTon)}</strong></div>
+                      <div><span>Price</span><strong>{formatPrice(token.priceTon)}</strong></div>
+                      <div><span>Volume</span><strong>{formatTon(token.volumeTon)}</strong></div>
+                      <div><span>Holders</span><strong>{compactNumber(token.holders)}</strong></div>
+                      <div><span>Status</span><strong>{token.migrated ? 'STON.fi' : 'Bonding'}</strong></div>
+                      <div><span>Created</span><strong>{formatTimeAgo(token.createdAt)}</strong></div>
+                    </div>
+                  </section>
+                </aside>
               </div>
 
             </div>
