@@ -203,7 +203,7 @@ export async function GET(
     chart,
     trades: trades.map((trade) => ({
       id: trade.id || trade.tx_hash || `${trade.token_address}-${trade.created_at}`,
-      type: trade.type === 'sell' ? 'sell' : 'buy',
+      type: String(trade.type || '').toLowerCase() === 'sell' ? 'sell' : 'buy',
       source: trade.source || 'bonding_curve',
       tonAmount: nanoToNumber(parseNano(trade.ton_amount)),
       tokenAmount: Number(parseNano(trade.token_amount)) / NANOS_PER_UNIT_NUMBER,

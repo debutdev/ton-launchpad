@@ -206,6 +206,26 @@ function readMaybeRef(slice: Slice): Cell | null {
   return slice.loadMaybeRef();
 }
 
+function parseForwardPayload(slice: Slice): Slice | null {
+  const payloadCell = beginCell().storeSlice(slice).endCell();
+
+  try {
+    const direct = payloadCell.beginParse();
+    if (direct.remainingBits >= 32 && direct.preloadUint(32) === OP_SELL_TOKENS) return direct;
+  } catch {
+    // Fall through to TEP-74 Either<Cell, ^Cell> parsing.
+  }
+
+  try {
+    const either = payloadCell.beginParse();
+    if (either.remainingBits < 1) return null;
+    const byRef = either.loadBit();
+    return byRef ? either.loadRef().beginParse() : either;
+  } catch {
+    return null;
+  }
+}
+
 function txTime(tx: { now?: number }): string {
   return new Date(Number(tx.now || Math.floor(Date.now() / 1000)) * 1000).toISOString();
 }
@@ -1017,8 +1037,8 @@ async function pollBondingCurves() {
             slice.loadUintBig(64);
             const tokenAmount = slice.loadCoins();
             const seller = slice.loadAddress();
-            const forwardPayload = slice;
-            if (forwardPayload.loadUint(32) !== OP_SELL_TOKENS) continue;
+            const forwardPayload = parseForwardPayload(slice);
+            if (!forwardPayload || forwardPayload.loadUint(32) !== OP_SELL_TOKENS) continue;
 
             const sellerStr = seller.toString();
             let tonAmount = 0n;

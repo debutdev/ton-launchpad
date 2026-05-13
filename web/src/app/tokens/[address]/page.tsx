@@ -674,7 +674,7 @@ export default function TokenDetailPage() {
   }
 
   return (
-    <main className="dashboard-shell">
+    <main className="dashboard-shell token-detail-shell">
       <TokenTopbar />
 
       <section className="dashboard-canvas token-detail-canvas" aria-label="Token detail canvas">
@@ -931,17 +931,6 @@ export default function TokenDetailPage() {
                   )}
                   {sellExceedsBalance && <p className="token-detail-trade-error">Amount exceeds wallet balance.</p>}
                   {tradeStatus && <p className="token-detail-trade-status">{tradeStatus}</p>}
-
-                  <div className="token-detail-trade-meta">
-                    <div>
-                      <span>Price</span>
-                      <strong>{formatPrice(token.priceTon)}</strong>
-                    </div>
-                    <div>
-                      <span>Bonded</span>
-                      <strong>{token.progressPercent.toFixed(2)}%</strong>
-                    </div>
-                  </div>
 
                   <button
                     type="button"
