@@ -235,7 +235,7 @@ export default function TokenDetailPage({
         const tonNano = parseNanoAmount(amount);
         const tokensOut = getBuyQuote(vTon, vTokens, tonNano);
         const gasReserve = getRequiredBuyGasReserve(tonNano, vTon, vTokens);
-        const migrationSuffix = gasReserve === MIGRATION_GAS_RESERVE ? ' + 0.8 TON migration gas' : '';
+        const migrationSuffix = gasReserve === MIGRATION_GAS_RESERVE ? ` + ${Number(MIGRATION_GAS_RESERVE) / 1e9} TON migration gas` : '';
         quoteText = `~ ${(Number(tokensOut) / 1e9).toLocaleString()} tokens${migrationSuffix}`;
       } else {
         const tokensNano = parseNanoAmount(amount);

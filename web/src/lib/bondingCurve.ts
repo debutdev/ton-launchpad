@@ -49,7 +49,7 @@ export const PRODUCTION_MIGRATION_THRESHOLD = MIGRATION_MARKET_CAP_TON;
 export const BUY_GAS_RESERVE = NANOS_PER_TON / 10n;
 
 /** Gas reserve kept when a buy triggers DEX migration */
-export const MIGRATION_GAS_RESERVE = (NANOS_PER_TON * 8n) / 10n;
+export const MIGRATION_GAS_RESERVE = (NANOS_PER_TON * 12n) / 10n;
 
 /** Buy-side TON fee in basis points. Disabled. */
 export const FEE_BPS = 0n;
