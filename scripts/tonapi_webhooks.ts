@@ -80,8 +80,8 @@ async function loadWatchedAccounts(): Promise<string[]> {
   const accounts = new Set<string>();
   accounts.add(
     rawAddress(
-      process.env.ACTON_TESTNET_FACTORY_ADDRESS ||
-        CURRENT_ACTON_TESTNET_FACTORY_ADDRESS ||
+      CURRENT_ACTON_TESTNET_FACTORY_ADDRESS ||
+        process.env.ACTON_TESTNET_FACTORY_ADDRESS ||
         process.env.NEXT_PUBLIC_FACTORY_ADDRESS ||
         '',
     ),
