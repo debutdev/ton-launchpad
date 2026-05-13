@@ -17,6 +17,7 @@ import { TopbarNav } from '../TopbarNav';
 import { useThemeMode } from '../providers';
 import { DEFAULT_DEPLOY_VALUE, TONCONNECT_TESTNET_CHAIN, deployTokenBody } from '@/lib/launchpad';
 import { supabase } from '@/lib/supabase';
+import { formatUserError } from '@/lib/userErrors';
 
 function shortWallet(address: string) {
   return address.length < 12 ? address : `${address.slice(0, 4)}...${address.slice(-4)}`;
@@ -178,7 +179,7 @@ export default function CreateToken() {
 
       router.push(`/tokens/${encodeURIComponent(matchedAddress)}`);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to create token.');
+      setErrorMessage(formatUserError(error, 'Unable to create token.'));
       setStatusMessage(null);
     } finally {
       setSubmitting(false);

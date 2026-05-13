@@ -22,6 +22,7 @@ import {
 } from '@/lib/launchpad';
 import { subscribeLaunchpadEvents } from '@/lib/liveEvents';
 import { supabase } from '@/lib/supabase';
+import { formatUserError } from '@/lib/userErrors';
 
 type PeriodKey = 'hour' | 'day' | 'week' | 'month' | 'ytd' | 'all';
 
@@ -650,7 +651,7 @@ export default function TokenDetailPage() {
       queuePostTradeRefresh();
       setTradeAmount(tradeSide === 'buy' ? '0.1' : '');
     } catch (error) {
-      setTradeStatus(error instanceof Error ? error.message : 'Transaction failed');
+      setTradeStatus(formatUserError(error));
     } finally {
       setSending(false);
     }
