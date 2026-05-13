@@ -86,6 +86,12 @@ const PERIODS: Array<{ id: PeriodKey; label: string }> = [
 
 const BUY_PRESETS = ['0.1', '0.5', '1', '2'];
 const SELL_PRESETS = [10, 25, 50, 100];
+const TRADE_SIZE_FILTERS = [
+  { id: 'all', label: 'All trades', minTon: 0 },
+  { id: '0.1', label: '0.1+ TON', minTon: 0.1 },
+  { id: '0.5', label: '0.5+ TON', minTon: 0.5 },
+  { id: '1', label: '1+ TON', minTon: 1 },
+];
 
 const fallbackImages = [
   '/memes/tonk-batcat.jpg',
@@ -302,6 +308,8 @@ export default function TokenDetailPage() {
   const router = useRouter();
   const [activePeriod, setActivePeriod] = useState<PeriodKey>('hour');
   const [tradeSide, setTradeSide] = useState<'buy' | 'sell'>('buy');
+  const [tradeSort, setTradeSort] = useState<'newest' | 'oldest'>('newest');
+  const [tradeSizeFilter, setTradeSizeFilter] = useState('all');
   const [tradeAmount, setTradeAmount] = useState('0.1');
   const [scrubberPosition, setScrubberPosition] = useState<number | undefined>();
   const [data, setData] = useState<TokenDetailResponse | null>(null);
@@ -466,6 +474,14 @@ export default function TokenDetailPage() {
   } : null;
   const buyQuote = token && tokenQuoteRow && !token.migrated ? quoteBondingCurveBuy(tokenQuoteRow, tradeAmountNano) : null;
   const sellQuote = token && tokenQuoteRow && !token.migrated ? quoteBondingCurveSell(tokenQuoteRow, tradeAmountNano) : null;
+  const selectedTradeSize = TRADE_SIZE_FILTERS.find((filter) => filter.id === tradeSizeFilter) || TRADE_SIZE_FILTERS[0];
+  const liveTrades = [...(data?.trades || [])]
+    .filter((trade) => trade.tonAmount >= selectedTradeSize.minTon)
+    .sort((a, b) => {
+      const aTime = new Date(a.timestamp || 0).getTime();
+      const bTime = new Date(b.timestamp || 0).getTime();
+      return tradeSort === 'newest' ? bTime - aTime : aTime - bTime;
+    });
   const selectedBuyPreset = tradeSide === 'buy' ? BUY_PRESETS.find((preset) => preset === tradeAmount) : undefined;
   const selectedSellPreset = tradeSide === 'sell' && tokenBalance && tokenBalance > 0n
     ? SELL_PRESETS.find((preset) => (tokenBalance * BigInt(preset)) / 100n === tradeAmountNano)
@@ -773,6 +789,56 @@ export default function TokenDetailPage() {
                     ))}
                   </div>
                 </div>
+
+                <section className="token-detail-live-trades" aria-label="Live token trades">
+                  <header className="token-detail-live-trades-header">
+                    <div>
+                      <span>Live trades</span>
+                      <strong>{compactNumber(liveTrades.length)} fills</strong>
+                    </div>
+                    <div className="token-detail-live-trade-controls">
+                      <label>
+                        <span>Sort</span>
+                        <select value={tradeSort} onChange={(event) => setTradeSort(event.target.value as 'newest' | 'oldest')}>
+                          <option value="newest">Newest</option>
+                          <option value="oldest">Oldest</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Size</span>
+                        <select value={tradeSizeFilter} onChange={(event) => setTradeSizeFilter(event.target.value)}>
+                          {TRADE_SIZE_FILTERS.map((filter) => (
+                            <option value={filter.id} key={filter.id}>{filter.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </header>
+                  <div className="token-detail-live-trades-table">
+                    <div className="token-detail-live-trades-head">
+                      <span>Side</span>
+                      <span>Tokens</span>
+                      <span>TON</span>
+                      <span>USD</span>
+                      <span>Wallet</span>
+                      <span>Time</span>
+                    </div>
+                    <div className="token-detail-live-trades-list">
+                      {liveTrades.length ? liveTrades.map((trade) => (
+                        <article className={`token-detail-live-trade-row token-detail-live-trade-${trade.type}`} key={trade.id}>
+                          <span>{trade.type}</span>
+                          <strong>{compactNumber(trade.tokenAmount, { maximumFractionDigits: trade.tokenAmount < 1 ? 6 : 2 })} {token.ticker}</strong>
+                          <strong>{formatTon(trade.tonAmount, { maximumFractionDigits: 4 })}</strong>
+                          <strong>{formatUsd(trade.tonAmount * TON_USD_PRICE, { maximumFractionDigits: 2 })}</strong>
+                          <code>{shortWallet(trade.trader)}</code>
+                          <small>{formatTimeAgo(trade.timestamp)}</small>
+                        </article>
+                      )) : (
+                        <p>{data.trades.length ? 'No trades match this size filter.' : 'No live trades yet.'}</p>
+                      )}
+                    </div>
+                  </div>
+                </section>
               </section>
 
               <div className="token-detail-side-column">
