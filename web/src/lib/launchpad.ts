@@ -73,6 +73,7 @@ export type DbTradeRow = {
   virtual_ton_after?: string | number | null;
   virtual_token_after?: string | number | null;
   tx_hash?: string | null;
+  tx_lt?: string | number | null;
   block_time?: string | null;
   timestamp?: string | null;
   created_at?: string | null;
@@ -230,10 +231,14 @@ export function quoteBondingCurveSell(row: DbTokenRow, tokensIn: bigint) {
 export function normalizeTokenRow(row: DbTokenRow, trades: DbTradeRow[] = []) {
   const virtualTonReserves = parseNano(row.virtual_ton_reserves);
   const virtualTokenReserves = parseNano(row.virtual_token_reserves);
-  const marketCapNano = parseNano(row.market_cap_ton) ||
-    (virtualTonReserves > 0n && virtualTokenReserves > 0n ? getMarketCap(virtualTonReserves, virtualTokenReserves) : 0n);
-  const priceNano = parseNano(row.token_price_ton) ||
-    (virtualTonReserves > 0n && virtualTokenReserves > 0n ? getPriceInNanotons(virtualTonReserves, virtualTokenReserves) : 0n);
+  const computedMarketCapNano = virtualTonReserves > 0n && virtualTokenReserves > 0n
+    ? getMarketCap(virtualTonReserves, virtualTokenReserves)
+    : 0n;
+  const computedPriceNano = virtualTonReserves > 0n && virtualTokenReserves > 0n
+    ? getPriceInNanotons(virtualTonReserves, virtualTokenReserves)
+    : 0n;
+  const marketCapNano = computedMarketCapNano || parseNano(row.market_cap_ton);
+  const priceNano = computedPriceNano || parseNano(row.token_price_ton);
   const holderSet = new Set<string>();
   let volumeNano = parseNano(row.volume_24h_ton);
 

@@ -9,9 +9,10 @@ import {
   normalizeTokenRow,
   parseNano,
 } from '@/lib/launchpad';
-import { START_MARKET_CAP_TON } from '@/lib/bondingCurve';
+import { getMarketCap, INITIAL_VIRTUAL_TOKENS, INITIAL_VIRTUAL_TON, START_MARKET_CAP_TON } from '@/lib/bondingCurve';
 
 type PeriodKey = 'hour' | 'day' | 'week' | 'month' | 'ytd' | 'all';
+type ChartPoints = { data: number[]; labels: string[] };
 
 const TOKEN_SELECT = [
   'id',
@@ -49,6 +50,13 @@ const PERIODS: Record<PeriodKey, { timeframe: '1m' | '5m' | '1h' | '1d'; limit: 
   month: { timeframe: '1h', limit: 720, label: '1M' },
   ytd: { timeframe: '1d', limit: 366, label: 'YTD' },
   all: { timeframe: '1d', limit: 1000, label: 'ALL' },
+};
+
+const PERIOD_WINDOWS_MS: Partial<Record<PeriodKey, number>> = {
+  hour: 60 * 60 * 1000,
+  day: 24 * 60 * 60 * 1000,
+  week: 7 * 24 * 60 * 60 * 1000,
+  month: 30 * 24 * 60 * 60 * 1000,
 };
 
 function candleValue(candle: DbCandleRow) {
@@ -109,12 +117,166 @@ function fallbackChart(tokenMarketCapTon: number, createdAt?: string | null) {
   }, tokenMarketCapTon, createdAt);
 }
 
-function tradeFallbackChart(tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
-  const points = [...trades]
-    .reverse()
+function compareTxLt(a: DbTradeRow, b: DbTradeRow) {
+  try {
+    const aLt = BigInt(a.tx_lt || 0);
+    const bLt = BigInt(b.tx_lt || 0);
+    if (aLt < bLt) return -1;
+    if (aLt > bLt) return 1;
+  } catch {
+    // Fall through to timestamp-based ordering.
+  }
+  return 0;
+}
+
+function tradeTime(trade: DbTradeRow) {
+  return trade.block_time || trade.created_at || trade.timestamp || null;
+}
+
+function tradeTimeMs(trade: DbTradeRow) {
+  const value = tradeTime(trade);
+  const time = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function sortTradesByChainTime(trades: DbTradeRow[], direction: 'asc' | 'desc' = 'asc') {
+  return trades
+    .map((trade, index) => ({ trade, index }))
+    .sort((a, b) => {
+      const byTime = tradeTimeMs(a.trade) - tradeTimeMs(b.trade);
+      if (byTime !== 0) return direction === 'asc' ? byTime : -byTime;
+      const byLt = compareTxLt(a.trade, b.trade);
+      if (byLt !== 0) return direction === 'asc' ? byLt : -byLt;
+      const byCreatedAt = new Date(a.trade.created_at || 0).getTime() - new Date(b.trade.created_at || 0).getTime();
+      if (byCreatedAt !== 0) return direction === 'asc' ? byCreatedAt : -byCreatedAt;
+      return direction === 'asc' ? a.index - b.index : b.index - a.index;
+    })
+    .map(({ trade }) => trade);
+}
+
+function reverseTradeReserves(state: { virtualTon: bigint; virtualTokens: bigint }, trade: DbTradeRow) {
+  const type = String(trade.type || '').toLowerCase();
+  const tonAmount = parseNano(trade.ton_amount);
+  const feeTon = parseNano(trade.fee_ton);
+  const tokenAmount = parseNano(trade.token_amount);
+
+  if (type === 'sell') {
+    return {
+      virtualTon: state.virtualTon + tonAmount + feeTon,
+      virtualTokens: state.virtualTokens > tokenAmount ? state.virtualTokens - tokenAmount : state.virtualTokens,
+    };
+  }
+
+  return {
+    virtualTon: state.virtualTon > tonAmount ? state.virtualTon - tonAmount : state.virtualTon,
+    virtualTokens: state.virtualTokens + tokenAmount,
+  };
+}
+
+function applyTradeReserves(state: { virtualTon: bigint; virtualTokens: bigint }, trade: DbTradeRow) {
+  const type = String(trade.type || '').toLowerCase();
+  const tonAmount = parseNano(trade.ton_amount);
+  const feeTon = parseNano(trade.fee_ton);
+  const tokenAmount = parseNano(trade.token_amount);
+
+  if (type === 'sell') {
+    return {
+      virtualTon: state.virtualTon > tonAmount + feeTon ? state.virtualTon - tonAmount - feeTon : state.virtualTon,
+      virtualTokens: state.virtualTokens + tokenAmount,
+    };
+  }
+
+  return {
+    virtualTon: state.virtualTon + tonAmount,
+    virtualTokens: state.virtualTokens > tokenAmount ? state.virtualTokens - tokenAmount : state.virtualTokens,
+  };
+}
+
+function marketCapPoint(state: { virtualTon: bigint; virtualTokens: bigint }) {
+  if (state.virtualTon <= 0n || state.virtualTokens <= 0n) return 0;
+  return nanoToNumber(getMarketCap(state.virtualTon, state.virtualTokens));
+}
+
+function reconstructTradeChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
+  const orderedTrades = sortTradesByChainTime(trades, 'asc');
+  if (orderedTrades.length === 0) return fallbackChart(tokenMarketCapTon, createdAt);
+
+  const finalVirtualTon = parseNano(tokenRow.virtual_ton_reserves);
+  const finalVirtualTokens = parseNano(tokenRow.virtual_token_reserves);
+  let startState = {
+    virtualTon: finalVirtualTon > 0n ? finalVirtualTon : INITIAL_VIRTUAL_TON,
+    virtualTokens: finalVirtualTokens > 0n ? finalVirtualTokens : INITIAL_VIRTUAL_TOKENS,
+  };
+
+  for (const trade of [...orderedTrades].reverse()) {
+    startState = reverseTradeReserves(startState, trade);
+  }
+
+  const labels: string[] = [];
+  const data: number[] = [];
+  const firstTradeTime = tradeTime(orderedTrades[0]);
+  labels.push(createdAt || firstTradeTime || new Date().toISOString());
+  data.push(marketCapPoint(startState) || nanoToNumber(START_MARKET_CAP_TON));
+
+  let state = startState;
+  for (const trade of orderedTrades) {
+    state = applyTradeReserves(state, trade);
+    const label = tradeTime(trade);
+    if (!label) continue;
+    labels.push(label);
+    data.push(marketCapPoint(state));
+  }
+
+  const finalState = {
+    virtualTon: finalVirtualTon,
+    virtualTokens: finalVirtualTokens,
+  };
+  const finalPoint = marketCapPoint(finalState) || tokenMarketCapTon;
+  const lastPoint = data[data.length - 1] || 0;
+  if (finalPoint > 0 && Math.abs(finalPoint - lastPoint) > 0.000000001) {
+    labels.push(new Date().toISOString());
+    data.push(finalPoint);
+  }
+
+  return addLaunchBaseline({ data, labels }, tokenMarketCapTon, createdAt);
+}
+
+function cutoffForPeriod(period: PeriodKey) {
+  if (period === 'all') return null;
+  if (period === 'ytd') return new Date(new Date().getFullYear(), 0, 1).getTime();
+  const windowMs = PERIOD_WINDOWS_MS[period];
+  return windowMs ? Date.now() - windowMs : null;
+}
+
+function filterChartForPeriod(chart: ChartPoints, period: PeriodKey): ChartPoints {
+  const cutoff = cutoffForPeriod(period);
+  if (!cutoff) return chart;
+
+  const points = chart.labels.map((label, index) => ({
+    label,
+    value: chart.data[index],
+    time: new Date(label).getTime(),
+  })).filter((point) => Number.isFinite(point.value));
+
+  const visible = points.filter((point) => Number.isFinite(point.time) && point.time >= cutoff);
+  const previous = [...points].reverse().find((point) => Number.isFinite(point.time) && point.time < cutoff);
+  const filtered = previous ? [previous, ...visible] : visible;
+  const fallback = filtered.length >= 2 ? filtered : points.slice(-2);
+
+  return {
+    data: fallback.map((point) => point.value),
+    labels: fallback.map((point) => point.label),
+  };
+}
+
+function tradeFallbackChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
+  const reconstructed = reconstructTradeChart(tokenRow, tokenMarketCapTon, trades, createdAt);
+  if (reconstructed.data.length > 2 || trades.length > 0) return reconstructed;
+
+  const points = sortTradesByChainTime(trades, 'asc')
     .map((trade) => ({
       value: nanoToNumber(parseNano(trade.market_cap_ton_after)),
-      label: trade.block_time || trade.created_at || trade.timestamp || null,
+      label: tradeTime(trade),
     }))
     .filter((point) => point.value > 0 && point.label);
 
@@ -126,28 +288,36 @@ function tradeFallbackChart(tokenMarketCapTon: number, trades: DbTradeRow[], cre
   }, tokenMarketCapTon, createdAt);
 }
 
-async function loadChart(tokenAddress: string, tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
+async function loadChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
   const result: Partial<Record<PeriodKey, { data: number[]; labels: string[]; label: string }>> = {};
+  const reconstructedChart = trades.length > 0
+    ? tradeFallbackChart(tokenRow, tokenMarketCapTon, trades, createdAt)
+    : null;
 
   for (const [period, config] of Object.entries(PERIODS) as Array<[PeriodKey, typeof PERIODS[PeriodKey]]>) {
+    if (reconstructedChart) {
+      result[period] = { ...filterChartForPeriod(reconstructedChart, period), label: config.label };
+      continue;
+    }
+
     const { data, error } = await supabase
       .from('token_candles')
       .select('*')
-      .eq('token_address', tokenAddress)
+      .eq('token_address', tokenRow.address)
       .eq('timeframe', config.timeframe)
       .order('bucket_start', { ascending: false })
       .limit(config.limit);
 
     if (error || !data || data.length === 0) {
-      result[period] = { ...tradeFallbackChart(tokenMarketCapTon, trades, createdAt), label: config.label };
+      result[period] = { ...tradeFallbackChart(tokenRow, tokenMarketCapTon, trades, createdAt), label: config.label };
       continue;
     }
 
     const candles = [...(data as DbCandleRow[])].reverse();
     result[period] = {
       ...addLaunchBaseline({
-      data: candles.map(candleValue),
-      labels: candles.map((candle) => candle.bucket_start),
+        data: candles.map(candleValue),
+        labels: candles.map((candle) => candle.bucket_start),
       }, tokenMarketCapTon, createdAt),
       label: config.label,
     };
@@ -175,7 +345,7 @@ export async function GET(
   const [{ data: tradesData, error: tradesError }, { data: trendingTokensData, error: trendingError }] = await Promise.all([
     supabase
       .from('trades')
-      .select('id, token_address, trader_address, user_address, type, source, ton_amount, token_amount, fee_ton, fee_token_amount, market_cap_ton_after, price_ton_after, created_at, block_time, tx_hash')
+      .select('id, token_address, trader_address, user_address, type, source, ton_amount, token_amount, fee_ton, fee_token_amount, market_cap_ton_after, price_ton_after, created_at, block_time, tx_hash, tx_lt')
       .eq('token_address', address)
       .order('created_at', { ascending: false })
       .limit(120),
@@ -189,10 +359,10 @@ export async function GET(
   if (tradesError) return NextResponse.json({ error: tradesError.message }, { status: 500 });
   if (trendingError) return NextResponse.json({ error: trendingError.message }, { status: 500 });
 
-  const trades = (tradesData || []) as DbTradeRow[];
+  const trades = sortTradesByChainTime((tradesData || []) as DbTradeRow[], 'desc');
   const typedTokenRow = tokenRow as unknown as DbTokenRow;
   const token = normalizeTokenRow(typedTokenRow, trades);
-  const chart = await loadChart(address, token.marketCapTon, trades, typedTokenRow.created_at);
+  const chart = await loadChart(typedTokenRow, token.marketCapTon, trades, typedTokenRow.created_at);
   const trending = ((trendingTokensData || []) as unknown as DbTokenRow[])
     .filter((item) => item.address !== address)
     .slice(0, 5)

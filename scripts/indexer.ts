@@ -885,6 +885,71 @@ async function updateReserves(bcAddress: string): Promise<ReserveSnapshot | null
   }
 }
 
+function deriveBondingTradeSnapshot(
+  before: TokenRow | null,
+  type: 'buy' | 'sell',
+  tonAmount: bigint,
+  tokenAmount: bigint,
+  feeTon: bigint = 0n,
+): ReserveSnapshot {
+  const beforeVirtualTon = parseNano(before?.virtual_ton_reserves) || INITIAL_VIRTUAL_TON;
+  const beforeVirtualTokens = parseNano(before?.virtual_token_reserves) || INITIAL_VIRTUAL_TOKENS;
+  const beforeRealTon = parseNano(before?.real_ton_reserves);
+  const beforeRealTokens = parseNano(before?.real_token_reserves) || REAL_TOKEN_SUPPLY;
+  const grossTon = tonAmount + feeTon;
+  const migrationState = Number(before?.migration_state || 0);
+
+  const virtualTonReserves = type === 'buy'
+    ? beforeVirtualTon + tonAmount
+    : beforeVirtualTon > grossTon
+    ? beforeVirtualTon - grossTon
+    : beforeVirtualTon;
+  const virtualTokenReserves = type === 'buy'
+    ? beforeVirtualTokens > tokenAmount
+      ? beforeVirtualTokens - tokenAmount
+      : beforeVirtualTokens
+    : beforeVirtualTokens + tokenAmount;
+  const realTonReserves = type === 'buy'
+    ? beforeRealTon + tonAmount
+    : beforeRealTon > grossTon
+    ? beforeRealTon - grossTon
+    : 0n;
+  const realTokenReserves = type === 'buy'
+    ? beforeRealTokens > tokenAmount
+      ? beforeRealTokens - tokenAmount
+      : beforeRealTokens
+    : beforeRealTokens + tokenAmount;
+  const currentSupply = REAL_TOKEN_SUPPLY > realTokenReserves ? REAL_TOKEN_SUPPLY - realTokenReserves : 0n;
+  const marketCapTon = getMarketCap(virtualTonReserves, virtualTokenReserves);
+  const priceTon = getPriceInNanotons(virtualTonReserves, virtualTokenReserves);
+
+  return {
+    virtualTonReserves,
+    virtualTokenReserves,
+    realTonReserves,
+    realTokenReserves,
+    currentSupply,
+    migrationState,
+    migrated: migrationState >= 2,
+    marketCapTon,
+    priceTon,
+  };
+}
+
+async function updateTokenFromTradeSnapshot(bcAddress: string, snapshot: ReserveSnapshot) {
+  await updateToken(bcAddress, {
+    virtual_ton_reserves: snapshot.virtualTonReserves.toString(),
+    virtual_token_reserves: snapshot.virtualTokenReserves.toString(),
+    real_ton_reserves: snapshot.realTonReserves.toString(),
+    real_token_reserves: snapshot.realTokenReserves.toString(),
+    token_price_ton: snapshot.priceTon.toString(),
+    token_price_usd: (Number(snapshot.priceTon) / 1e9 * TON_USD_PRICE).toString(),
+    market_cap_ton: snapshot.marketCapTon.toString(),
+    market_cap_usd: (Number(snapshot.marketCapTon) / 1e9 * TON_USD_PRICE).toString(),
+    market_cap_usd_snapshot: TON_USD_PRICE.toString(),
+  });
+}
+
 async function refreshTradeCount(tokenAddress: string) {
   const { count, error: countError } = await supabase
     .from('trades')
@@ -978,8 +1043,9 @@ async function pollBondingCurves() {
       const txs = await retry('getTransactions(curve)', () =>
         client.getTransactions(Address.parse(addr), { limit: 40, archival: false }),
       );
+      let shouldSyncReserves = false;
 
-      for (const tx of txs) {
+      for (const tx of [...txs].reverse()) {
         const txHash = tx.hash().toString('hex');
         const uniqueKey = `${addr}:${txHash}`;
         if (seenTxs.has(uniqueKey)) continue;
@@ -997,16 +1063,11 @@ async function pollBondingCurves() {
             const attachedTon = inMsg.info.type === 'internal' ? inMsg.info.value.coins : 0n;
             const tonAmount = inferBuyAmount(attachedTon);
             const userAddr = inMsg.info.type === 'internal' ? inMsg.info.src.toString() : 'unknown';
-            const reserves = await updateReserves(addr);
-            if (!reserves) continue;
-
-            const tokenAmount = before
-              ? parseNano(before.real_token_reserves) - reserves.realTokenReserves
-              : 0n;
-            const mintedAmount = tokenAmount > 0n
-              ? tokenAmount
-              : Array.from(tx.outMessages.values()).reduce((sum, outMsg) => sum + parseMintedAmount(outMsg.body), 0n);
+            const mintedAmount = Array.from(tx.outMessages.values()).reduce((sum, outMsg) => sum + parseMintedAmount(outMsg.body), 0n);
             if (mintedAmount <= 0n) continue;
+            const reserves = deriveBondingTradeSnapshot(before, 'buy', tonAmount, mintedAmount);
+            await updateTokenFromTradeSnapshot(addr, reserves);
+            shouldSyncReserves = true;
             const at = txTime(tx);
             const trade = await upsertTrade({
               token_address: addr,
@@ -1049,8 +1110,9 @@ async function pollBondingCurves() {
               if (PLATFORM_WALLET && outMsg.info.dest.equals(PLATFORM_WALLET)) platformFeeTon += outMsg.info.value.coins;
             }
 
-            const reserves = await updateReserves(addr);
-            if (!reserves) continue;
+            const reserves = deriveBondingTradeSnapshot(before, 'sell', tonAmount, tokenAmount, platformFeeTon);
+            await updateTokenFromTradeSnapshot(addr, reserves);
+            shouldSyncReserves = true;
             const at = txTime(tx);
             const trade = await upsertTrade({
               token_address: addr,
@@ -1082,6 +1144,8 @@ async function pollBondingCurves() {
           // Not a supported curve message.
         }
       }
+
+      if (shouldSyncReserves) await updateReserves(addr);
     } catch (error) {
       console.error(`BC poll error (${addr.slice(0, 12)}...):`, error instanceof Error ? error.message : error);
     }
