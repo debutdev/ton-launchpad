@@ -26,6 +26,17 @@ function normalizeTicker(value: string) {
   return value.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase();
 }
 
+async function loadLaunchpadConfig(): Promise<{ factoryAddress: string }> {
+  const response = await fetch(`/api/launchpad-config?ts=${Date.now()}`, {
+    cache: 'no-store',
+  });
+  const data = await response.json() as { factoryAddress?: string; error?: string };
+  if (!response.ok || !data.factoryAddress) {
+    throw new Error(data.error || 'Factory address is not configured for this deployment.');
+  }
+  return { factoryAddress: data.factoryAddress };
+}
+
 async function findIndexedToken(metadataUrl: string): Promise<string | null> {
   const { data, error } = await supabase
     .from('tokens')
@@ -149,10 +160,7 @@ export default function CreateToken() {
 
       const queryId = BigInt(Date.now());
       const body = deployTokenBody(queryId, uploadData.metadataUrl);
-      const factoryAddress = process.env.NEXT_PUBLIC_FACTORY_ADDRESS?.trim();
-      if (!factoryAddress) {
-        throw new Error('Factory address is not configured for this deployment.');
-      }
+      const { factoryAddress } = await loadLaunchpadConfig();
 
       setStatusMessage('Confirm token launch in your wallet...');
       await tonConnectUI.sendTransaction({
