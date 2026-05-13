@@ -59,7 +59,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
   };
 
   const manifestUrl = getManifestUrl();
+  const [mounted, setMounted] = useState(false);
   const [colorScheme, setColorScheme] = useState<ColorScheme>(getInitialColorScheme);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = colorScheme;
@@ -93,13 +98,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <MediaQueryProvider>
       <ThemeProvider theme={defaultTheme} activeColorScheme={colorScheme}>
         <ThemeModeContext.Provider value={themeContextValue}>
-          <TonConnectUIProvider
-            manifestUrl={manifestUrl}
-            restoreConnection={false}
-            actionsConfiguration={{ returnStrategy: 'back' }}
-          >
-            {children}
-          </TonConnectUIProvider>
+          {mounted ? (
+            <TonConnectUIProvider
+              manifestUrl={manifestUrl}
+              restoreConnection={false}
+              actionsConfiguration={{ returnStrategy: 'back' }}
+            >
+              {children}
+            </TonConnectUIProvider>
+          ) : null}
         </ThemeModeContext.Provider>
       </ThemeProvider>
     </MediaQueryProvider>
