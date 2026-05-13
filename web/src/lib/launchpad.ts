@@ -18,6 +18,7 @@ export const NANOS_PER_UNIT_NUMBER = 1_000_000_000;
 export const DEFAULT_DEPLOY_VALUE = toNano('0.7');
 export const DEFAULT_SELL_TRANSFER_VALUE = toNano('0.25');
 export const DEFAULT_SELL_FORWARD_TON = toNano('0.15');
+export const TONCONNECT_TESTNET_CHAIN = '-3';
 
 export type DbTokenRow = {
   id?: string | null;

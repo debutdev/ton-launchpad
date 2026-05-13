@@ -12,6 +12,7 @@ import { useThemeMode } from '../../providers';
 import {
   DEFAULT_SELL_FORWARD_TON,
   DEFAULT_SELL_TRANSFER_VALUE,
+  TONCONNECT_TESTNET_CHAIN,
   buyTokensBody,
   jettonTransferBody,
   parseDecimalToNano,
@@ -422,6 +423,10 @@ export default function TokenDetailPage() {
       return;
     }
     if (tradeAmountNano <= 0n || sellExceedsBalance) return;
+    if (wallet.account.chain !== TONCONNECT_TESTNET_CHAIN) {
+      setTradeStatus('Switch your wallet to TON testnet before trading.');
+      return;
+    }
 
     setSending(true);
     setTradeStatus('Confirm transaction in your wallet...');
@@ -442,12 +447,14 @@ export default function TokenDetailPage() {
         if (!response.ok || !swap.address || !swap.amount) throw new Error(swap.error || 'Unable to build STON.fi swap');
         await tonConnectUI.sendTransaction({
           validUntil: Math.floor(Date.now() / 1000) + 300,
+          network: TONCONNECT_TESTNET_CHAIN,
           messages: [{ address: swap.address, amount: swap.amount, payload: swap.payload || undefined }],
         });
       } else if (tradeSide === 'buy') {
         if (!buyQuote) throw new Error('Unable to quote buy');
         await tonConnectUI.sendTransaction({
           validUntil: Math.floor(Date.now() / 1000) + 300,
+          network: TONCONNECT_TESTNET_CHAIN,
           messages: [{
             address: token.address,
             amount: buyQuote.txValue.toString(),
@@ -476,6 +483,7 @@ export default function TokenDetailPage() {
         });
         await tonConnectUI.sendTransaction({
           validUntil: Math.floor(Date.now() / 1000) + 300,
+          network: TONCONNECT_TESTNET_CHAIN,
           messages: [{
             address: userJettonWallet.toString({ testOnly: true }),
             amount: DEFAULT_SELL_TRANSFER_VALUE.toString(),

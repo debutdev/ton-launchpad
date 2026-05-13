@@ -16,7 +16,7 @@ import { useRouter } from 'next/navigation';
 import { DitheredSwirl } from '../DitheredSwirl';
 import { TopbarNav } from '../TopbarNav';
 import { useThemeMode } from '../providers';
-import { DEFAULT_DEPLOY_VALUE, deployTokenBody } from '@/lib/launchpad';
+import { DEFAULT_DEPLOY_VALUE, TONCONNECT_TESTNET_CHAIN, deployTokenBody } from '@/lib/launchpad';
 import { supabase } from '@/lib/supabase';
 
 function shortWallet(address: string) {
@@ -61,6 +61,10 @@ export default function CreateToken() {
     setStatusMessage('Uploading token metadata...');
 
     try {
+      if (wallet.account.chain !== TONCONNECT_TESTNET_CHAIN) {
+        throw new Error('Switch your wallet to TON testnet before launching a token.');
+      }
+
       const uploadForm = new FormData();
       uploadForm.set('name', name);
       uploadForm.set('symbol', symbol);
@@ -90,6 +94,7 @@ export default function CreateToken() {
       setStatusMessage('Confirm token launch in your wallet...');
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 300,
+        network: TONCONNECT_TESTNET_CHAIN,
         messages: [{
           address: factoryAddress,
           amount: DEFAULT_DEPLOY_VALUE.toString(),
