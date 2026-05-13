@@ -1,9 +1,9 @@
 'use client';
 
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
-import { Bell, Moon, Search, Sun } from 'lucide-react';
+import { Bell, Coins, Moon, Search, Sun, Wallet } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { PixelGridShader } from '../PixelGridShader';
 import { TopbarNav } from '../TopbarNav';
 import { useThemeMode } from '../providers';
@@ -30,6 +30,23 @@ type PortfolioHolding = {
   balance: number;
   balanceNano: string;
   valueTon: number;
+  valueUsd?: number;
+};
+
+type WalletHolding = {
+  token: {
+    address: string;
+    name: string;
+    ticker: string;
+    imageUrl: string | null;
+    priceUsd: number;
+    decimals: number;
+    isNative: boolean;
+  };
+  balance: number;
+  balanceNano: string;
+  valueUsd: number;
+  launchpadToken?: PortfolioToken;
 };
 
 type PortfolioTrade = {
@@ -48,6 +65,7 @@ type PortfolioTrade = {
 
 type PortfolioResponse = {
   wallet: string;
+  tonUsd: number;
   summary: {
     createdCount: number;
     tradedCount: number;
@@ -57,10 +75,14 @@ type PortfolioResponse = {
     netFlowTon: number;
     holdingsCount: number;
     holdingsValueTon: number;
+    holdingsValueUsd: number;
+    nativeTonBalance: number;
+    nativeTonValueUsd: number;
   };
   createdTokens: PortfolioToken[];
   tradedTokens: PortfolioToken[];
   holdings: PortfolioHolding[];
+  walletHoldings: WalletHolding[];
   recentTrades: PortfolioTrade[];
 };
 
@@ -91,8 +113,14 @@ function formatTon(value: number, options?: Intl.NumberFormatOptions) {
   return `${compactNumber(value, options)} TON`;
 }
 
-function formatTokenAmount(value: number, ticker: string) {
-  return `${compactNumber(value, { maximumFractionDigits: value < 1 ? 6 : 2 })} ${ticker}`;
+function formatUsd(value: number, options?: Intl.NumberFormatOptions) {
+  if (!Number.isFinite(value)) return '$0.00';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: value >= 10_000 ? 0 : 2,
+    ...options,
+  }).format(value);
 }
 
 function formatTimeAgo(value: string | null) {
@@ -171,74 +199,93 @@ function TokenThumb({ token, index }: { token: PortfolioToken; index: number }) 
   );
 }
 
-function HoldingCard({ holding, index }: { holding: PortfolioHolding; index: number }) {
+function HoldingThumb({ holding, index }: { holding: WalletHolding; index: number }) {
+  if (holding.token.isNative) {
+    return (
+      <div className="portfolio-native-token-mark" aria-hidden="true">
+        <Coins size={19} strokeWidth={2.5} />
+      </div>
+    );
+  }
+
+  const imageUrl = holding.token.imageUrl || fallbackImages[index % fallbackImages.length];
+  return imageUrl ? (
+    <img
+      alt=""
+      src={imageUrl}
+      onError={(event) => {
+        event.currentTarget.style.display = 'none';
+      }}
+    />
+  ) : (
+    <span>${holding.token.ticker}</span>
+  );
+}
+
+function HoldingRow({ holding, index }: { holding: WalletHolding; index: number }) {
   const router = useRouter();
-  const token = holding.token;
+  const token = holding.launchpadToken;
+  const openToken = () => {
+    if (token) router.push(`/tokens/${encodeURIComponent(token.address)}`);
+  };
+
+  return (
+    <article
+      className={`portfolio-table-row portfolio-holding-row${token ? ' is-clickable' : ''}`}
+      role={token ? 'button' : undefined}
+      tabIndex={token ? 0 : undefined}
+      onClick={openToken}
+      onKeyDown={(event) => {
+        if (token && (event.key === 'Enter' || event.key === ' ')) openToken();
+      }}
+    >
+      <div className="portfolio-row-token">
+        <div className="portfolio-row-image">
+          <HoldingThumb holding={holding} index={index} />
+        </div>
+        <div>
+          <strong>{holding.token.name}</strong>
+          <span>{holding.token.ticker}</span>
+        </div>
+      </div>
+      <strong className="portfolio-table-balance">{compactNumber(holding.balance, { maximumFractionDigits: holding.balance < 1 ? 6 : 2 })}</strong>
+      <strong className="portfolio-table-value">{formatUsd(holding.valueUsd)}</strong>
+      <span className="portfolio-table-price">{holding.token.priceUsd > 0 ? formatUsd(holding.token.priceUsd, { maximumFractionDigits: 6 }) : '--'}</span>
+    </article>
+  );
+}
+
+function CreatedTokenRow({ token, index, tonUsd }: { token: PortfolioToken; index: number; tonUsd: number }) {
+  const router = useRouter();
   const openToken = () => router.push(`/tokens/${encodeURIComponent(token.address)}`);
 
   return (
     <article
-      className="portfolio-token-card"
+      className="portfolio-table-row portfolio-created-row is-clickable"
       role="button"
       tabIndex={0}
       onClick={openToken}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') openToken();
       }}
+      style={{ '--meme-progress': `${token.progressPercent}%` } as CSSProperties}
     >
-      <div className="portfolio-token-image">
-        <TokenThumb token={token} index={index} />
-      </div>
-      <div className="portfolio-token-copy">
-        <div className="portfolio-token-title">
+      <div className="portfolio-row-token">
+        <div className="portfolio-row-image">
+          <TokenThumb token={token} index={index} />
+        </div>
+        <div>
           <strong>{token.name}</strong>
           <span>${token.ticker}</span>
         </div>
-        <div className="portfolio-token-metrics">
-          <div><span>Holding</span><strong>{formatTokenAmount(holding.balance, token.ticker)}</strong></div>
-          <div><span>Value</span><strong>{formatTon(holding.valueTon, { maximumFractionDigits: 4 })}</strong></div>
-          <div><span>Market cap</span><strong>{formatTon(token.marketCapTon)}</strong></div>
-          <div><span>Status</span><strong>{token.migrated ? 'STON.fi' : 'Bonding'}</strong></div>
-        </div>
+      </div>
+      <strong className="portfolio-created-age">{formatTimeAgo(token.createdAt)}</strong>
+      <strong className="portfolio-table-value">{formatUsd(token.marketCapTon * tonUsd)}</strong>
+      <div className="portfolio-created-bonding">
+        <span className="meme-progress-track" aria-hidden="true"><span /></span>
+        <strong>{token.progressPercent.toFixed(0)}%</strong>
       </div>
     </article>
-  );
-}
-
-function MiniTokenCard({ token, index, label }: { token: PortfolioToken; index: number; label: string }) {
-  const router = useRouter();
-  const openToken = () => router.push(`/tokens/${encodeURIComponent(token.address)}`);
-
-  return (
-    <article
-      className="portfolio-mini-token-card"
-      role="button"
-      tabIndex={0}
-      onClick={openToken}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') openToken();
-      }}
-    >
-      <div className="portfolio-mini-token-image">
-        <TokenThumb token={token} index={index} />
-      </div>
-      <div>
-        <span>{label}</span>
-        <strong>{token.name}</strong>
-        <small>${token.ticker} - {formatTon(token.marketCapTon)}</small>
-      </div>
-    </article>
-  );
-}
-
-function TradeRow({ trade }: { trade: PortfolioTrade }) {
-  return (
-    <div className={`portfolio-trade-row portfolio-trade-${trade.type}`}>
-      <span>{trade.type}</span>
-      <strong>{trade.token ? `$${trade.token.ticker}` : 'Token'}</strong>
-      <code>{formatTon(trade.tonAmount, { maximumFractionDigits: 4 })}</code>
-      <small>{formatTimeAgo(trade.timestamp)}</small>
-    </div>
   );
 }
 
@@ -250,16 +297,12 @@ export default function PortfolioPage() {
   const [error, setError] = useState<string | null>(null);
   const refreshDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const walletAddress = wallet?.account.address || '';
-
-  const netFlowLabel = useMemo(() => {
-    const value = data?.summary.netFlowTon || 0;
-    return `${value >= 0 ? '+' : ''}${formatTon(value, { maximumFractionDigits: 4 })}`;
-  }, [data?.summary.netFlowTon]);
+  const tonUsd = data?.tonUsd || 0;
 
   useEffect(() => {
     if (!walletAddress) {
-      setData(null);
-      setError(null);
+      queueMicrotask(() => setData(null));
+      queueMicrotask(() => setError(null));
       return;
     }
 
@@ -350,73 +393,72 @@ export default function PortfolioPage() {
 
         {wallet && (
           <div className="portfolio-dashboard">
-            <section className="portfolio-overview-card">
-              <div className="portfolio-overview-copy">
-                <span>Portfolio</span>
-                <h1>{shortWallet(wallet.account.address)}</h1>
-                <p>{loading ? 'Loading wallet stats...' : error || 'Live wallet stats across Tonked launches and trades.'}</p>
+            <section className="portfolio-account-strip">
+              <div className="portfolio-profile-cell">
+                <div className="portfolio-avatar" aria-hidden="true">
+                  <Wallet size={28} strokeWidth={2.4} />
+                </div>
+                <div>
+                  <h1>{shortWallet(wallet.account.address)}</h1>
+                  <span>{loading ? 'Loading wallet stats...' : error || 'TON portfolio'}</span>
+                </div>
               </div>
-              <div className="portfolio-summary-grid">
-                <div><span>Holdings value</span><strong>{formatTon(data?.summary.holdingsValueTon || 0, { maximumFractionDigits: 4 })}</strong></div>
-                <div><span>Tokens created</span><strong>{compactNumber(data?.summary.createdCount || 0)}</strong></div>
-                <div><span>Tokens traded</span><strong>{compactNumber(data?.summary.tradedCount || 0)}</strong></div>
-                <div><span>Net flow</span><strong>{netFlowLabel}</strong></div>
+              <div className="portfolio-stat-cell portfolio-stat-primary">
+                <span>Portfolio value</span>
+                <strong>{formatUsd(data?.summary.holdingsValueUsd || 0)}</strong>
+                <small>{formatTon(data?.summary.nativeTonBalance || 0, { maximumFractionDigits: 4 })} @ {tonUsd ? formatUsd(tonUsd) : '--'}</small>
+              </div>
+              <div className="portfolio-stat-cell">
+                <span>Total tokens created</span>
+                <strong>{compactNumber(data?.summary.createdCount || 0)}</strong>
+              </div>
+              <div className="portfolio-stat-cell">
+                <span>Tokens held</span>
+                <strong>{compactNumber(data?.summary.holdingsCount || 0)}</strong>
+              </div>
+              <div className="portfolio-stat-cell">
+                <span>Tokens traded</span>
+                <strong>{compactNumber(data?.summary.tradedCount || 0)}</strong>
               </div>
             </section>
 
-            <section className="portfolio-main-grid">
-              <div className="portfolio-section-card portfolio-holdings-card">
+            <section className="portfolio-split-grid">
+              <div className="portfolio-section-card portfolio-table-card">
                 <header>
-                  <span>Holdings</span>
+                  <span>Portfolio holdings</span>
                   <strong>{compactNumber(data?.summary.holdingsCount || 0)}</strong>
                 </header>
-                <div className="portfolio-holdings-list">
-                  {data?.holdings.length ? data.holdings.map((holding, index) => (
-                    <HoldingCard holding={holding} index={index} key={holding.token.address} />
+                <div className="portfolio-table-head portfolio-holdings-head">
+                  <span>Token</span>
+                  <span>Balance</span>
+                  <span>Value</span>
+                  <span>Price</span>
+                </div>
+                <div className="portfolio-table-list">
+                  {data?.walletHoldings.length ? data.walletHoldings.map((holding, index) => (
+                    <HoldingRow holding={holding} index={index} key={`${holding.token.address}-${index}`} />
                   )) : (
-                    <p>{loading ? 'Loading holdings...' : 'No token holdings found for this wallet yet.'}</p>
+                    <p>{loading ? 'Loading holdings...' : 'No TON or jetton holdings found for this wallet yet.'}</p>
                   )}
                 </div>
               </div>
 
-              <div className="portfolio-section-card">
-                <header>
-                  <span>Recent trades</span>
-                  <strong>{compactNumber(data?.summary.tradeCount || 0)}</strong>
-                </header>
-                <div className="portfolio-trades-list">
-                  {data?.recentTrades.length ? data.recentTrades.slice(0, 12).map((trade) => (
-                    <TradeRow trade={trade} key={trade.id} />
-                  )) : (
-                    <p>{loading ? 'Loading trades...' : 'No trades found for this wallet yet.'}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="portfolio-section-card">
+              <div className="portfolio-section-card portfolio-table-card">
                 <header>
                   <span>Created tokens</span>
                   <strong>{compactNumber(data?.summary.createdCount || 0)}</strong>
                 </header>
-                <div className="portfolio-mini-token-list">
-                  {data?.createdTokens.length ? data.createdTokens.slice(0, 8).map((token, index) => (
-                    <MiniTokenCard token={token} index={index} label="Created" key={token.address} />
+                <div className="portfolio-table-head portfolio-created-head">
+                  <span>Token</span>
+                  <span>Age</span>
+                  <span>Mcap</span>
+                  <span>Bonding</span>
+                </div>
+                <div className="portfolio-table-list">
+                  {data?.createdTokens.length ? data.createdTokens.map((token, index) => (
+                    <CreatedTokenRow token={token} index={index} key={token.address} tonUsd={tonUsd} />
                   )) : (
                     <p>No tokens created from this wallet.</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="portfolio-section-card">
-                <header>
-                  <span>Traded tokens</span>
-                  <strong>{compactNumber(data?.summary.tradedCount || 0)}</strong>
-                </header>
-                <div className="portfolio-mini-token-list">
-                  {data?.tradedTokens.length ? data.tradedTokens.slice(0, 8).map((token, index) => (
-                    <MiniTokenCard token={token} index={index + 8} label="Traded" key={token.address} />
-                  )) : (
-                    <p>No traded tokens found.</p>
                   )}
                 </div>
               </div>
