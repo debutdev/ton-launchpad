@@ -6,6 +6,49 @@ function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+const TONCENTER_ENDPOINT = process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC';
+const TONAPI_ENDPOINT = process.env.TONAPI_ENDPOINT || 'https://testnet.tonapi.io';
+
+function isRateLimit(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('429') || message.toLowerCase().includes('rate limit');
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchTonapiBalance(masterAddress: Address, ownerAddress: Address) {
+  const owner = encodeURIComponent(ownerAddress.toString({ testOnly: true }));
+  const master = encodeURIComponent(masterAddress.toString({ testOnly: true }));
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (process.env.TONAPI_KEY) headers.authorization = `Bearer ${process.env.TONAPI_KEY}`;
+
+  const response = await fetch(`${TONAPI_ENDPOINT}/v2/accounts/${owner}/jettons/${master}`, {
+    cache: 'no-store',
+    headers,
+  });
+
+  if (response.status === 404) {
+    return { balance: '0', walletAddress: null as string | null };
+  }
+  if (!response.ok) {
+    throw new Error(`TonAPI balance request failed with ${response.status}`);
+  }
+
+  const data = await response.json() as {
+    balance?: string | number;
+    wallet_address?: string | { address?: string };
+  };
+  const walletAddress = typeof data.wallet_address === 'string'
+    ? data.wallet_address
+    : data.wallet_address?.address || null;
+  return {
+    balance: data.balance?.toString() || '0',
+    walletAddress,
+  };
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const master = url.searchParams.get('master') || '';
@@ -22,12 +65,45 @@ export async function GET(request: Request) {
     return jsonError('Invalid address');
   }
 
-  const client = new TonClient({
-    endpoint: process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC',
-    apiKey: process.env.TONCENTER_API_KEY,
-  });
-
   try {
+    try {
+      const tonapiBalance = await fetchTonapiBalance(masterAddress, ownerAddress);
+      if (tonapiBalance) {
+        if (tonapiBalance.walletAddress) {
+          return NextResponse.json(
+            {
+              balance: tonapiBalance.balance,
+              walletAddress: Address.parse(tonapiBalance.walletAddress).toString({ testOnly: true }),
+            },
+            { headers: { 'cache-control': 'no-store, max-age=0' } },
+          );
+        }
+
+        const result = await new TonClient({
+          endpoint: TONCENTER_ENDPOINT,
+          apiKey: process.env.TONCENTER_API_KEY,
+        }).runMethod(
+          masterAddress,
+          'get_wallet_address',
+          [{ type: 'slice', cell: beginCell().storeAddress(ownerAddress).endCell() }],
+        );
+        return NextResponse.json(
+          {
+            balance: tonapiBalance.balance,
+            walletAddress: result.stack.readAddress().toString({ testOnly: true }),
+          },
+          { headers: { 'cache-control': 'no-store, max-age=0' } },
+        );
+      }
+    } catch (tonapiError) {
+      if (!isRateLimit(tonapiError)) console.warn('TonAPI jetton balance fallback:', tonapiError);
+    }
+
+    const client = new TonClient({
+      endpoint: TONCENTER_ENDPOINT,
+      apiKey: process.env.TONCENTER_API_KEY,
+    });
+
     const result = await client.runMethod(
       masterAddress,
       'get_wallet_address',
@@ -36,17 +112,33 @@ export async function GET(request: Request) {
     const walletAddress = result.stack.readAddress();
     const state = await client.getContractState(walletAddress);
     if (state.state !== 'active') {
-      return NextResponse.json({
-        balance: '0',
-        walletAddress: walletAddress.toString({ testOnly: true }),
-      });
+      return NextResponse.json(
+        {
+          balance: '0',
+          walletAddress: walletAddress.toString({ testOnly: true }),
+        },
+        { headers: { 'cache-control': 'no-store, max-age=0' } },
+      );
     }
 
-    const walletData = await client.runMethod(walletAddress, 'get_wallet_data');
-    return NextResponse.json({
-      balance: walletData.stack.readBigNumber().toString(),
-      walletAddress: walletAddress.toString({ testOnly: true }),
-    });
+    let walletData;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        walletData = await client.runMethod(walletAddress, 'get_wallet_data');
+        break;
+      } catch (balanceError) {
+        if (!isRateLimit(balanceError) || attempt === 2) throw balanceError;
+        await sleep(750 * (attempt + 1));
+      }
+    }
+
+    return NextResponse.json(
+      {
+        balance: walletData!.stack.readBigNumber().toString(),
+        walletAddress: walletAddress.toString({ testOnly: true }),
+      },
+      { headers: { 'cache-control': 'no-store, max-age=0' } },
+    );
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Unable to load jetton balance' },

@@ -263,6 +263,39 @@ function TokenTopbar() {
   );
 }
 
+function appendOptimisticChartPoint(chart: TokenDetailResponse['chart'], marketCapTon: number) {
+  const timestamp = new Date().toISOString();
+  const nextChart = { ...chart };
+  for (const period of PERIODS) {
+    const current = chart[period.id];
+    nextChart[period.id] = {
+      ...current,
+      data: [...current.data, marketCapTon].slice(-1000),
+      labels: [...current.labels, timestamp].slice(-1000),
+    };
+  }
+  return nextChart;
+}
+
+function detailChartPointCount(chart: TokenDetailResponse['chart']) {
+  return Object.values(chart).reduce((sum, period) => sum + period.data.length, 0);
+}
+
+function mergeTokenDetailData(
+  current: TokenDetailResponse | null,
+  nextData: TokenDetailResponse,
+  optimisticUntilMs: number,
+): TokenDetailResponse {
+  if (!current || Date.now() > optimisticUntilMs) return nextData;
+  if (detailChartPointCount(nextData.chart) >= detailChartPointCount(current.chart)) return nextData;
+
+  return {
+    ...nextData,
+    chart: current.chart,
+    trades: nextData.trades.length >= current.trades.length ? nextData.trades : current.trades,
+  };
+}
+
 export default function TokenDetailPage() {
   const params = useParams<{ address: string }>();
   const router = useRouter();
@@ -321,7 +354,7 @@ export default function TokenDetailPage() {
         if (!response.ok) throw new Error('Token detail request failed');
         const nextData = await response.json() as TokenDetailResponse;
         hasLoadedDetail.current = true;
-        setData((current) => mergeDetailData(current, nextData));
+        setData((current) => mergeTokenDetailData(current, nextData, optimisticUntil.current));
       } catch (requestError) {
         if (!controller.signal.aborted) {
           setError(requestError instanceof Error ? requestError.message : 'Unable to load token');
@@ -380,7 +413,21 @@ export default function TokenDetailPage() {
     async function loadTokenBalance() {
       setBalanceLoading(true);
       try {
-        const balance = await fetchJettonBalance(activeJettonAddress, walletAddress);
+        let balance: Awaited<ReturnType<typeof fetchJettonBalance>> | null = null;
+        let lastError: unknown = null;
+        for (const delay of [0, 900, 1_800]) {
+          if (delay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            if (cancelled) return;
+          }
+          try {
+            balance = await fetchJettonBalance(activeJettonAddress, walletAddress);
+            break;
+          } catch (retryError) {
+            lastError = retryError;
+          }
+        }
+        if (!balance) throw lastError instanceof Error ? lastError : new Error('Unable to load jetton balance');
         if (!cancelled) {
           setTokenBalance(BigInt(balance.balance));
           setUserJettonWalletAddress(balance.walletAddress);
@@ -388,8 +435,7 @@ export default function TokenDetailPage() {
       } catch (balanceError) {
         if (!cancelled) {
           console.warn('Unable to load jetton balance', balanceError);
-          setTokenBalance(0n);
-          setUserJettonWalletAddress(null);
+          setTokenBalance((current) => current);
         }
       } finally {
         if (!cancelled) setBalanceLoading(false);
@@ -464,38 +510,6 @@ export default function TokenDetailPage() {
     setTradeAmount(formatNanoAmount((tokenBalance * BigInt(percent)) / 100n, 9));
   }
 
-  function appendOptimisticPoint(chart: TokenDetailResponse['chart'], marketCapTon: number) {
-    const timestamp = new Date().toISOString();
-    const nextChart = { ...chart };
-    for (const period of PERIODS) {
-      const current = chart[period.id];
-      nextChart[period.id] = {
-        ...current,
-        data: [...current.data, marketCapTon].slice(-1000),
-        labels: [...current.labels, timestamp].slice(-1000),
-      };
-    }
-    return nextChart;
-  }
-
-  function chartPointCount(chart: TokenDetailResponse['chart']) {
-    return Object.values(chart).reduce((sum, period) => sum + period.data.length, 0);
-  }
-
-  function mergeDetailData(
-    current: TokenDetailResponse | null,
-    nextData: TokenDetailResponse,
-  ): TokenDetailResponse {
-    if (!current || Date.now() > optimisticUntil.current) return nextData;
-    if (chartPointCount(nextData.chart) >= chartPointCount(current.chart)) return nextData;
-
-    return {
-      ...nextData,
-      chart: current.chart,
-      trades: nextData.trades.length >= current.trades.length ? nextData.trades : current.trades,
-    };
-  }
-
   function applyOptimisticCurveTrade(type: 'buy' | 'sell') {
     if (!token || !data || token.migrated) return;
     const quote = type === 'buy' ? buyQuote : sellQuote;
@@ -520,7 +534,7 @@ export default function TokenDetailPage() {
           priceTon: nextPriceTon,
           volumeTon: current.token.volumeTon + Math.max(0, tonAmount),
         },
-        chart: appendOptimisticPoint(current.chart, nextMarketCapTon),
+        chart: appendOptimisticChartPoint(current.chart, nextMarketCapTon),
         trades: [
           {
             id: `optimistic-${Date.now()}`,
@@ -841,7 +855,11 @@ export default function TokenDetailPage() {
                   {tradeSide === 'sell' && wallet && (
                     <div className="token-detail-trade-balance">
                       <span>Balance</span>
-                      <strong>{balanceLoading ? 'Loading...' : `${formatNanoAmount(tokenBalance || 0n, 4)} ${token.ticker}`}</strong>
+                      <strong>
+                        {balanceLoading || tokenBalance === null
+                          ? 'Loading...'
+                          : `${formatNanoAmount(tokenBalance, 4)} ${token.ticker}`}
+                      </strong>
                     </div>
                   )}
                   {sellExceedsBalance && <p className="token-detail-trade-error">Amount exceeds wallet balance.</p>}
