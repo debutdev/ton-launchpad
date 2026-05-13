@@ -777,21 +777,6 @@ export default function TokenDetailPage() {
                     <div><span>Created</span><strong>{formatTimeAgo(token.createdAt)}</strong></div>
                   </div>
                 </section>
-                <section className="token-detail-trades-card" aria-label="Recent trades">
-                  <h2>Recent trades</h2>
-                  <div className="token-detail-trades-list">
-                    {data.trades.length === 0 ? (
-                      <p>No trades yet.</p>
-                    ) : data.trades.slice(0, 14).map((trade) => (
-                      <div className={`token-detail-trade-row token-detail-trade-${trade.type}`} key={trade.id}>
-                        <span>{trade.type}</span>
-                        <strong>{formatTon(trade.tonAmount, { maximumFractionDigits: 4 })}</strong>
-                        <code>{trade.trader ? `${trade.trader.slice(0, 6)}...${trade.trader.slice(-5)}` : '--'}</code>
-                        <small>{trade.source === 'stonfi' ? 'STON.fi' : 'Curve'}</small>
-                      </div>
-                    ))}
-                  </div>
-                </section>
               </div>
 
             </div>
