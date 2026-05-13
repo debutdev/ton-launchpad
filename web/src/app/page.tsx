@@ -83,6 +83,7 @@ type RecentActivityItem = {
 };
 
 const NANOS_PER_TON = 1_000_000_000;
+const HOME_TON_USD_SNAPSHOT = 2.454;
 
 function shortWallet(address: string) {
   return address.length < 12 ? address : `${address.slice(0, 4)}...${address.slice(-4)}`;
@@ -178,6 +179,13 @@ function formatNanoTonAmount(value: string | number | null | undefined) {
   return `${compactNumber(tonValue, {
     maximumFractionDigits: tonValue < 10 ? 2 : 1,
   })} TON`;
+}
+
+function formatTonStatValue(nanotons: bigint) {
+  const whole = nanotons / BigInt(NANOS_PER_TON);
+  const fraction = nanotons % BigInt(NANOS_PER_TON);
+  const fractionText = fraction.toString().padStart(9, '0').replace(/0+$/, '');
+  return `${whole}${fractionText ? `.${fractionText}` : ''}`;
 }
 
 function formatTimeAgo(value: string | null | undefined) {
@@ -626,37 +634,56 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadStats() {
+    async function loadDashboardData() {
       try {
-        const response = await fetch('/api/stats', { cache: 'no-store' });
-        if (!response.ok) throw new Error('Stats request failed');
-        const nextStats = await response.json() as LaunchpadStats;
+        const { data: tokens, error: tokenError } = await supabase
+          .from('tokens')
+          .select('address, creator_address, name, symbol, image_url, virtual_ton_reserves, virtual_token_reserves, real_ton_reserves, created_at')
+          .order('created_at', { ascending: false })
+          .limit(50);
 
-        if (!cancelled) setStats(nextStats);
-      } catch {
-        // Keep the last good stats snapshot instead of zeroing the UI.
-      }
-    }
+        if (tokenError) throw new Error(tokenError.message);
 
-    async function loadTopMemes() {
-      try {
-        const [{ data: tokens, error: tokenError }, { data: trades, error: tradeError }] = await Promise.all([
-          supabase
-            .from('tokens')
-            .select('address, creator_address, name, symbol, image_url, virtual_ton_reserves, virtual_token_reserves, real_ton_reserves, created_at')
-            .order('created_at', { ascending: false })
-            .limit(50),
-          supabase
+        const allTrades: RecentTradeRow[] = [];
+        let offset = 0;
+
+        while (true) {
+          const { data: trades, error: tradeError } = await supabase
             .from('trades')
             .select('token_address, ton_amount, token_amount, trader_address, user_address, type, timestamp')
             .order('timestamp', { ascending: false })
-            .limit(5000),
-        ]);
+            .range(offset, offset + 999);
 
-        if (tokenError || tradeError) throw new Error(tokenError?.message || tradeError?.message);
+          if (tradeError) throw new Error(tradeError.message);
+          const batch = (trades || []) as RecentTradeRow[];
+          allTrades.push(...batch);
+          if (batch.length < 1000) break;
+          offset += 1000;
+        }
+
         if (!cancelled) {
           const tokenRows = (tokens || []) as TokenRow[];
-          const tradeRows = (trades || []) as RecentTradeRow[];
+          const tradeRows = allTrades;
+          let buyVolumeNano = 0n;
+          let sellVolumeNano = 0n;
+
+          for (const trade of tradeRows) {
+            const amount = parseNano(trade.ton_amount);
+            const tradeType = String(trade.type || '').toLowerCase();
+            if (tradeType === 'buy') buyVolumeNano += amount;
+            if (tradeType === 'sell') sellVolumeNano += amount;
+          }
+
+          const totalVolumeNano = buyVolumeNano + sellVolumeNano;
+          setStats({
+            tonUsdPrice: HOME_TON_USD_SNAPSHOT,
+            tokensLaunched: tokenRows.length,
+            buyVolumeTon: formatTonStatValue(buyVolumeNano),
+            sellVolumeTon: formatTonStatValue(sellVolumeNano),
+            totalVolumeTon: formatTonStatValue(totalVolumeNano),
+            totalVolumeUsd: nanoToTon(totalVolumeNano) * HOME_TON_USD_SNAPSHOT,
+            updatedAt: new Date().toISOString(),
+          });
           setTopMemes(buildTopMemes(tokenRows, tradeRows));
           setRecentActivity(buildRecentActivity(tokenRows, tradeRows.slice(0, 40)));
         }
@@ -665,37 +692,32 @@ export default function Home() {
       }
     }
 
-    void loadStats();
-    void loadTopMemes();
+    void loadDashboardData();
 
     const interval = window.setInterval(() => {
-      void loadStats();
-      void loadTopMemes();
+      void loadDashboardData();
     }, 30_000);
     const tokenChannel = supabase
       .channel('launchpad-stats-tokens')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tokens' }, () => {
-        void loadStats();
-        void loadTopMemes();
+        void loadDashboardData();
       })
       .subscribe();
     const tradeChannel = supabase
       .channel('launchpad-stats-trades')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, () => {
-        void loadStats();
-        void loadTopMemes();
+        void loadDashboardData();
       })
       .subscribe();
     const candleChannel = supabase
       .channel('launchpad-stats-candles')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'token_candles' }, () => {
-        void loadTopMemes();
+        void loadDashboardData();
       })
       .subscribe();
     const unsubscribeLiveEvents = subscribeLaunchpadEvents((event) => {
       if (event.type === 'token.created' || event.type === 'token.updated' || event.type === 'trade.created' || event.type === 'candle.updated') {
-        void loadStats();
-        void loadTopMemes();
+        void loadDashboardData();
       }
     });
 
