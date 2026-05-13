@@ -1,7 +1,7 @@
 'use client';
 
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
-import { Bell, Coins, Moon, Sun, Wallet } from 'lucide-react';
+import { Bell, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { NumberTicker } from '../NumberTicker';
@@ -147,6 +147,23 @@ function PortfolioSummaryNumber({
   );
 }
 
+function TonLogoMark({ className = '' }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 56 56"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="28" cy="28" r="28" fill="#0098EA" />
+      <path
+        d="M14.32 18.59h27.36c1.55 0 2.53 1.67 1.76 3.02L29.76 45.37a2.03 2.03 0 0 1-3.52 0L12.56 21.61c-.77-1.35.21-3.02 1.76-3.02Zm12.02 3.18h-9.72l9.72 16.64V21.77Zm3.32 16.64 9.72-16.64h-9.72v16.64Z"
+        fill="#FFFFFF"
+      />
+    </svg>
+  );
+}
+
 function PortfolioTopbar() {
   const [tonConnectUI] = useTonConnectUI();
   const wallet = useTonWallet();
@@ -210,7 +227,7 @@ function HoldingThumb({ holding }: { holding: WalletHolding }) {
   if (holding.token.isNative) {
     return (
       <div className="portfolio-native-token-mark" aria-hidden="true">
-        <Coins size={19} strokeWidth={2.5} />
+        <TonLogoMark />
       </div>
     );
   }
@@ -403,7 +420,7 @@ export default function PortfolioPage() {
             <section className="portfolio-account-strip">
               <div className="portfolio-profile-cell">
                 <div className="portfolio-avatar" aria-hidden="true">
-                  <Wallet size={28} strokeWidth={2.4} />
+                  <TonLogoMark />
                 </div>
                 <div>
                   <h1>{shortWallet(wallet.account.address)}</h1>

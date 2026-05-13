@@ -729,9 +729,8 @@ export default function TokenDetailPage() {
           <div className="dashboard-shelf-ridge token-detail-ridge" aria-hidden="true" />
 
           {loading && (
-            <div className="token-detail-state-card token-detail-loading-card">
+            <div className="token-detail-state-card token-detail-loading-card" aria-label="Loading token">
               <div className="token-detail-loader" aria-hidden="true" />
-              <span>Fetching launchpad stats and trades.</span>
             </div>
           )}
 

@@ -48,7 +48,8 @@ type MemeTradeRow = {
 type RecentTradeRow = MemeTradeRow & {
   type: 'buy' | 'sell' | string | null;
   token_amount: string | null;
-  timestamp: string | null;
+  block_time: string | null;
+  created_at: string | null;
 };
 
 type RollingNumberFormat = Omit<Intl.NumberFormatOptions, 'notation'> & {
@@ -250,16 +251,17 @@ function buildRecentActivity(tokens: TokenRow[], trades: RecentTradeRow[]) {
       const token = trade.token_address ? tokenMap.get(trade.token_address) : undefined;
       const tokenName = token?.name?.trim() || 'Unknown meme';
       const ticker = (token?.symbol?.trim() || 'UNK').toUpperCase();
-      const timestampMs = trade.timestamp ? new Date(trade.timestamp).getTime() : Date.now() - index;
+      const timestamp = trade.block_time || trade.created_at;
+      const timestampMs = timestamp ? new Date(timestamp).getTime() : Date.now() - index;
 
       return {
-        id: `trade-${trade.timestamp || index}-${trade.token_address || ticker}`,
+        id: `trade-${timestamp || index}-${trade.token_address || ticker}`,
         type: tradeType === 'sell' ? 'sell' : 'buy',
         tokenName,
         ticker,
         amountLabel: formatNanoTonAmount(trade.ton_amount),
         userLabel: shortAddress(trade.trader_address || trade.user_address || ''),
-        timeLabel: formatTimeAgo(trade.timestamp),
+        timeLabel: formatTimeAgo(timestamp),
         accentHue: tokenAccentHue({ name: tokenName, ticker }),
         timestampMs: Number.isFinite(timestampMs) ? timestampMs : Date.now() - index,
       };
@@ -636,11 +638,21 @@ export default function Home() {
 
     async function loadDashboardData() {
       try {
-        const { data: tokens, error: tokenError } = await supabase
+        let apiStats: LaunchpadStats | null = null;
+        try {
+          const statsResponse = await fetch('/api/stats', { cache: 'no-store' });
+          if (statsResponse.ok) {
+            apiStats = await statsResponse.json() as LaunchpadStats;
+          }
+        } catch {
+          apiStats = null;
+        }
+
+        const { data: tokens, error: tokenError, count: tokenCount } = await supabase
           .from('tokens')
-          .select('address, creator_address, name, symbol, image_url, virtual_ton_reserves, virtual_token_reserves, real_ton_reserves, created_at')
+          .select('address, creator_address, name, symbol, image_url, virtual_ton_reserves, virtual_token_reserves, real_ton_reserves, created_at', { count: 'exact' })
           .order('created_at', { ascending: false })
-          .limit(50);
+          .limit(120);
 
         if (tokenError) throw new Error(tokenError.message);
 
@@ -650,8 +662,8 @@ export default function Home() {
         while (true) {
           const { data: trades, error: tradeError } = await supabase
             .from('trades')
-            .select('token_address, ton_amount, token_amount, trader_address, user_address, type, timestamp')
-            .order('timestamp', { ascending: false })
+            .select('token_address, ton_amount, token_amount, trader_address, user_address, type, created_at, block_time')
+            .order('created_at', { ascending: false })
             .range(offset, offset + 999);
 
           if (tradeError) throw new Error(tradeError.message);
@@ -675,15 +687,19 @@ export default function Home() {
           }
 
           const totalVolumeNano = buyVolumeNano + sellVolumeNano;
-          setStats({
+          const fallbackStats = {
             tonUsdPrice: HOME_TON_USD_SNAPSHOT,
-            tokensLaunched: tokenRows.length,
+            tokensLaunched: tokenCount ?? tokenRows.length,
             buyVolumeTon: formatTonStatValue(buyVolumeNano),
             sellVolumeTon: formatTonStatValue(sellVolumeNano),
             totalVolumeTon: formatTonStatValue(totalVolumeNano),
             totalVolumeUsd: nanoToTon(totalVolumeNano) * HOME_TON_USD_SNAPSHOT,
             updatedAt: new Date().toISOString(),
-          });
+          };
+          setStats(apiStats ? {
+            ...apiStats,
+            tokensLaunched: apiStats.tokensLaunched || fallbackStats.tokensLaunched,
+          } : fallbackStats);
           setTopMemes(buildTopMemes(tokenRows, tradeRows));
           setRecentActivity(buildRecentActivity(tokenRows, tradeRows.slice(0, 40)));
         }
