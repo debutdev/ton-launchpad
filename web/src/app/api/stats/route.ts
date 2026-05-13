@@ -50,7 +50,7 @@ async function getTonUsdPrice() {
 
 export async function GET() {
   const [{ count, error: tokenError }, tonUsdPrice] = await Promise.all([
-    supabase.from('tokens').select('id', { count: 'exact', head: true }),
+    supabase.from('tokens').select('id', { count: 'exact' }).limit(1),
     getTonUsdPrice(),
   ]);
 
