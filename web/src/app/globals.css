@@ -2966,9 +2966,12 @@ html, body {
 }
 
 .portfolio-page-canvas {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
   min-height: max(790px, calc(100vh - 112px));
+  padding: 22px;
+  overflow: hidden;
 }
 
 .portfolio-pixel-grid-bg {
@@ -3169,6 +3172,401 @@ html, body {
   align-self: flex-start;
   margin-top: auto;
   min-width: 132px;
+}
+
+.portfolio-dashboard,
+.portfolio-empty-card {
+  position: relative;
+  z-index: 2;
+}
+
+.portfolio-dashboard {
+  display: flex;
+  width: 100%;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+}
+
+.portfolio-empty-card,
+.portfolio-overview-card,
+.portfolio-section-card {
+  overflow: hidden;
+  border: 1px solid var(--surface-panel-border);
+  border-radius: 20px;
+  background: var(--card-bg-layered);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    inset 0 -16px 30px rgba(16, 24, 40, 0.028),
+    0 1px 2px rgba(16, 24, 40, 0.04),
+    0 22px 70px rgba(84, 152, 230, 0.1);
+}
+
+.portfolio-empty-card {
+  display: flex;
+  width: min(540px, calc(100% - 48px));
+  min-height: 320px;
+  flex-direction: column;
+  gap: 12px;
+  margin: auto;
+  padding: 32px;
+}
+
+.portfolio-empty-card > span,
+.portfolio-overview-copy > span,
+.portfolio-section-card header span,
+.portfolio-token-metrics span,
+.portfolio-mini-token-card span {
+  color: var(--tonked-blue);
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.portfolio-empty-card h1,
+.portfolio-overview-copy h1 {
+  margin: 0;
+  color: var(--tonked-blue);
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.portfolio-empty-card p,
+.portfolio-overview-copy p,
+.portfolio-section-card p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.portfolio-connect-button {
+  align-self: flex-start;
+  margin-top: auto;
+  min-width: 148px;
+}
+
+.portfolio-overview-card {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.7fr) minmax(0, 1.3fr);
+  gap: 16px;
+  padding: 18px;
+}
+
+.portfolio-overview-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.portfolio-summary-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.portfolio-summary-grid div,
+.portfolio-token-metrics div {
+  min-width: 0;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 12px;
+  background: var(--surface-control);
+  box-shadow: var(--control-shadow);
+}
+
+.portfolio-summary-grid div {
+  display: flex;
+  min-height: 78px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  padding: 12px;
+}
+
+.portfolio-summary-grid span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.portfolio-summary-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tonked-blue);
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portfolio-main-grid {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr);
+  gap: 14px;
+}
+
+.portfolio-section-card {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.portfolio-holdings-card {
+  grid-row: span 2;
+}
+
+.portfolio-section-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.portfolio-section-card header strong {
+  color: var(--tonked-blue);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.portfolio-holdings-list,
+.portfolio-mini-token-list,
+.portfolio-trades-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.portfolio-holdings-list,
+.portfolio-trades-list {
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.portfolio-token-card,
+.portfolio-mini-token-card,
+.portfolio-trade-row {
+  border: 1px solid var(--surface-control-border);
+  border-radius: 14px;
+  background: var(--surface-control);
+  box-shadow: var(--control-shadow);
+}
+
+.portfolio-token-card,
+.portfolio-mini-token-card {
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.portfolio-token-card:hover,
+.portfolio-mini-token-card:hover {
+  border-color: rgba(84, 152, 230, 0.48);
+  transform: translateY(-1px);
+  box-shadow:
+    var(--control-shadow),
+    0 14px 28px rgba(84, 152, 230, 0.14);
+}
+
+.portfolio-token-card {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px;
+}
+
+.portfolio-token-image,
+.portfolio-mini-token-image {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid rgba(84, 152, 230, 0.72);
+  background:
+    linear-gradient(135deg, rgba(84, 152, 230, 0.2), rgba(255, 255, 255, 0.5)),
+    var(--surface-control);
+}
+
+.portfolio-token-image {
+  width: 116px;
+  aspect-ratio: 1;
+  border-radius: 18px;
+}
+
+.portfolio-token-image img,
+.portfolio-mini-token-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.portfolio-token-image span,
+.portfolio-mini-token-image span {
+  color: var(--tonked-blue);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.portfolio-token-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.portfolio-token-title {
+  min-width: 0;
+}
+
+.portfolio-token-title strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portfolio-token-title span {
+  display: block;
+  margin-top: 4px;
+  color: var(--tonked-blue);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.portfolio-token-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.portfolio-token-metrics div {
+  display: flex;
+  min-height: 58px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 9px;
+}
+
+.portfolio-token-metrics strong {
+  overflow: hidden;
+  color: var(--tonked-blue);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portfolio-mini-token-card {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+}
+
+.portfolio-mini-token-image {
+  width: 54px;
+  aspect-ratio: 1;
+  border-radius: 13px;
+}
+
+.portfolio-mini-token-card div:last-child {
+  min-width: 0;
+}
+
+.portfolio-mini-token-card strong,
+.portfolio-mini-token-card small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portfolio-mini-token-card strong {
+  margin-top: 4px;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.portfolio-mini-token-card small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.portfolio-trade-row {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: 52px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+}
+
+.portfolio-trade-row span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.portfolio-trade-buy span {
+  color: var(--tonked-blue);
+  background: rgba(84, 152, 230, 0.13);
+}
+
+.portfolio-trade-sell span {
+  color: #ff3f61;
+  background: rgba(255, 63, 97, 0.12);
+}
+
+.portfolio-trade-row strong,
+.portfolio-trade-row code,
+.portfolio-trade-row small {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portfolio-trade-row strong {
+  color: var(--text-strong);
+}
+
+.portfolio-trade-row code {
+  color: var(--tonked-blue);
+  font-family: inherit;
+}
+
+.portfolio-trade-row small {
+  color: var(--text-muted);
+  text-align: right;
 }
 
 @keyframes gradient-bars-wave {
@@ -3815,6 +4213,27 @@ html, body {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     inset 0 -12px 24px rgba(0, 0, 0, 0.24);
+}
+
+:root[data-theme="dark"] .portfolio-empty-card,
+:root[data-theme="dark"] .portfolio-overview-card,
+:root[data-theme="dark"] .portfolio-section-card {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.075),
+    inset 0 -16px 30px rgba(0, 0, 0, 0.26),
+    0 20px 60px rgba(84, 152, 230, 0.1),
+    0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="dark"] .portfolio-summary-grid div,
+:root[data-theme="dark"] .portfolio-token-metrics div,
+:root[data-theme="dark"] .portfolio-token-card,
+:root[data-theme="dark"] .portfolio-mini-token-card,
+:root[data-theme="dark"] .portfolio-trade-row {
+  background: rgba(20, 23, 29, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    inset 0 -12px 22px rgba(0, 0, 0, 0.26);
 }
 
 :root[data-theme="dark"] .tokens-toolbar-button {
@@ -5795,6 +6214,84 @@ html, body {
   .token-detail-trending-row em {
     grid-column: 3;
     text-align: left;
+  }
+}
+
+@media (max-width: 1180px) {
+  .portfolio-overview-card {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-holdings-card {
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .portfolio-page-canvas {
+    min-height: 0;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  .portfolio-dashboard {
+    padding: 0;
+  }
+
+  .portfolio-empty-card {
+    width: 100%;
+    min-height: 300px;
+    padding: 24px;
+  }
+
+  .portfolio-overview-card,
+  .portfolio-section-card {
+    border-radius: 18px;
+  }
+
+  .portfolio-summary-grid,
+  .portfolio-token-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-token-card {
+    grid-template-columns: 84px minmax(0, 1fr);
+  }
+
+  .portfolio-token-image {
+    width: 84px;
+    border-radius: 15px;
+  }
+
+  .portfolio-token-title strong {
+    font-size: 19px;
+  }
+
+  .portfolio-trade-row {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+  }
+
+  .portfolio-trade-row small {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .portfolio-token-card {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-token-image {
+    width: min(100%, 128px);
+  }
+
+  .portfolio-summary-grid,
+  .portfolio-token-metrics {
+    grid-template-columns: 1fr;
   }
 }
 
