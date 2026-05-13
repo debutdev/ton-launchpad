@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
-import { Address } from '@ton/core';
 import {
   Bell,
   Link,
@@ -25,6 +24,71 @@ function shortWallet(address: string) {
 
 function normalizeTicker(value: string) {
   return value.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase();
+}
+
+async function findIndexedToken(metadataUrl: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('tokens')
+    .select('address')
+    .eq('metadata_url', metadataUrl)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return null;
+  return typeof data?.address === 'string' ? data.address : null;
+}
+
+function waitForIndexedToken(metadataUrl: string, queryId: bigint): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    const timers: number[] = [];
+
+    const cleanup = () => {
+      settled = true;
+      for (const timer of timers) window.clearTimeout(timer);
+      if (channel) void supabase.removeChannel(channel);
+    };
+
+    const resolveOnce = (address: string) => {
+      if (settled) return;
+      cleanup();
+      resolve(address);
+    };
+
+    const checkNow = async () => {
+      const address = await findIndexedToken(metadataUrl);
+      if (address) resolveOnce(address);
+    };
+
+    channel = supabase
+      .channel(`create-token-${queryId.toString()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'tokens',
+          filter: `metadata_url=eq.${metadataUrl}`,
+        },
+        (payload) => {
+          const row = payload.new as { address?: string };
+          if (row.address) resolveOnce(row.address);
+        },
+      )
+      .subscribe(() => {
+        void checkNow();
+      });
+
+    timers.push(window.setInterval(() => void checkNow(), 2_500));
+    timers.push(window.setTimeout(() => {
+      if (settled) return;
+      cleanup();
+      reject(new Error('Timed out waiting for the indexer. The token may still appear shortly on the tokens page.'));
+    }, 120_000));
+    void checkNow();
+  });
 }
 
 export default function CreateToken() {
@@ -83,7 +147,6 @@ export default function CreateToken() {
         throw new Error(uploadData.error || 'Metadata upload failed');
       }
 
-      const creatorAddress = Address.parse(wallet.account.address).toString();
       const queryId = BigInt(Date.now());
       const body = deployTokenBody(queryId, uploadData.metadataUrl);
       const factoryAddress = process.env.NEXT_PUBLIC_FACTORY_ADDRESS?.trim();
@@ -103,33 +166,7 @@ export default function CreateToken() {
       });
 
       setStatusMessage('Transaction sent. Waiting for indexer confirmation...');
-      const matchedAddress = await new Promise<string>((resolve, reject) => {
-        const timeout = window.setTimeout(() => {
-          supabase.removeChannel(channel);
-          reject(new Error('Timed out waiting for the indexer. The token may still appear shortly.'));
-        }, 120_000);
-
-        const channel = supabase
-          .channel(`create-token-${queryId.toString()}`)
-          .on(
-            'postgres_changes',
-            {
-              event: 'INSERT',
-              schema: 'public',
-              table: 'tokens',
-              filter: `creator_address=eq.${creatorAddress}`,
-            },
-            (payload) => {
-              const row = payload.new as { address?: string; metadata_url?: string | null; created_at?: string | null };
-              if (row.address && row.metadata_url === uploadData.metadataUrl) {
-                window.clearTimeout(timeout);
-                supabase.removeChannel(channel);
-                resolve(row.address);
-              }
-            },
-          )
-          .subscribe();
-      });
+      const matchedAddress = await waitForIndexedToken(uploadData.metadataUrl, queryId);
 
       router.push(`/tokens/${encodeURIComponent(matchedAddress)}`);
     } catch (error) {
