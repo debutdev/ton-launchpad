@@ -252,6 +252,7 @@ export default function TokenDetailPage() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [balanceNonce, setBalanceNonce] = useState(0);
   const refreshTimers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const previousTradeCount = useRef<number | null>(null);
   const address = Array.isArray(params.address) ? params.address[0] : params.address;
   const [tonConnectUI] = useTonConnectUI();
   const wallet = useTonWallet();
@@ -263,6 +264,16 @@ export default function TokenDetailPage() {
     refreshTimers.current.forEach((timer) => clearTimeout(timer));
     refreshTimers.current = [];
   }, []);
+
+  useEffect(() => {
+    const previous = previousTradeCount.current;
+    previousTradeCount.current = liveTradeCount;
+    if (previous === null || liveTradeCount <= previous || !tradeStatus?.startsWith('Transaction sent')) return;
+
+    setTradeStatus('Trade indexed.');
+    const timer = setTimeout(() => setTradeStatus(null), 2500);
+    return () => clearTimeout(timer);
+  }, [liveTradeCount, tradeStatus]);
 
   useEffect(() => {
     const controller = new AbortController();

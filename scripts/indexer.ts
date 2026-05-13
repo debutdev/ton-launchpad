@@ -46,6 +46,8 @@ const OP_TOKEN_DEPLOYED = 0x20002;
 const OP_BUY_TOKENS = 0x10001;
 const OP_SELL_TOKENS = 0x10002;
 const OP_JETTON_NOTIFICATION = 0x7362d09c;
+const OP_MINT = 0x642b7d07;
+const OP_JETTON_TRANSFER_INTERNAL = 0x178d4519;
 const OP_STONFI_SWAP = 0x6664de2a;
 const OP_STONFI_PAY_TO = 0x657b54f5;
 const BUY_GAS_RESERVE = 100000000n;
@@ -204,6 +206,22 @@ function readMaybeRef(slice: Slice): Cell | null {
 
 function txTime(tx: { now?: number }): string {
   return new Date(Number(tx.now || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+}
+
+function parseMintedAmount(body: Cell | null | undefined): bigint {
+  if (!body) return 0n;
+  try {
+    const slice = body.beginParse();
+    if (slice.loadUint(32) !== OP_MINT) return 0n;
+    slice.loadUintBig(64);
+    slice.loadAddress();
+    const transfer = slice.loadRef().beginParse();
+    if (transfer.loadUint(32) !== OP_JETTON_TRANSFER_INTERNAL) return 0n;
+    transfer.loadUintBig(64);
+    return transfer.loadCoins();
+  } catch {
+    return 0n;
+  }
 }
 
 function getBucketStart(date: Date, timeframe: '1m' | '5m' | '1h' | '1d'): string {
@@ -963,7 +981,10 @@ async function pollBondingCurves() {
             const tokenAmount = before
               ? parseNano(before.real_token_reserves) - reserves.realTokenReserves
               : 0n;
-            if (tokenAmount <= 0n) continue;
+            const mintedAmount = tokenAmount > 0n
+              ? tokenAmount
+              : Array.from(tx.outMessages.values()).reduce((sum, outMsg) => sum + parseMintedAmount(outMsg.body), 0n);
+            if (mintedAmount <= 0n) continue;
             const at = txTime(tx);
             const trade = await upsertTrade({
               token_address: addr,
@@ -972,7 +993,7 @@ async function pollBondingCurves() {
               type: 'buy',
               source: 'bonding_curve',
               ton_amount: tonAmount.toString(),
-              token_amount: tokenAmount > 0n ? tokenAmount.toString() : '0',
+              token_amount: mintedAmount.toString(),
               fee_ton: '0',
               fee_token_amount: '0',
               platform_revenue_token_amount: '0',
