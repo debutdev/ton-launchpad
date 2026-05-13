@@ -419,9 +419,6 @@ export default function PortfolioPage() {
           <div className="portfolio-dashboard">
             <section className="portfolio-account-strip">
               <div className="portfolio-profile-cell">
-                <div className="portfolio-avatar" aria-hidden="true">
-                  <TonLogoMark />
-                </div>
                 <div>
                   <h1>{shortWallet(wallet.account.address)}</h1>
                   <span>{loading ? 'Loading wallet stats...' : error || 'TON portfolio'}</span>
