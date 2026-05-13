@@ -56,9 +56,10 @@ function candleValue(candle: DbCandleRow) {
 
 function fallbackChart(tokenMarketCapTon: number) {
   const now = Date.now();
+  const previous = now - 60_000;
   return {
-    data: [tokenMarketCapTon],
-    labels: [new Date(now).toISOString()],
+    data: [tokenMarketCapTon, tokenMarketCapTon],
+    labels: [new Date(previous).toISOString(), new Date(now).toISOString()],
   };
 }
 

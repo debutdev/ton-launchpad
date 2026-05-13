@@ -2,8 +2,7 @@
 
 import { LineChart, Scrubber } from '@coinbase/cds-web-visualization/chart';
 import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
-import { Address, beginCell } from '@ton/core';
-import { TonClient } from '@ton/ton';
+import { Address } from '@ton/core';
 import { Bell, Moon, Search, Sun } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
@@ -36,6 +35,8 @@ type TokenDetailToken = {
   imageUrl: string | null;
   marketCapTon: number;
   priceTon: number;
+  migrationMarketCapNano: string;
+  migrationMarketCapTon: number;
   virtualTonReserves: string;
   virtualTokenReserves: string;
   holders: number;
@@ -167,6 +168,18 @@ function formatTimeAgo(value: string | null) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+async function fetchJettonBalance(master: string, owner: string): Promise<{ balance: string; walletAddress: string }> {
+  const response = await fetch(
+    `/api/jetton-balance?master=${encodeURIComponent(master)}&owner=${encodeURIComponent(owner)}`,
+    { cache: 'no-store' },
+  );
+  const data = await response.json() as { balance?: string; walletAddress?: string; error?: string };
+  if (!response.ok || data.balance === undefined || !data.walletAddress) {
+    throw new Error(data.error || 'Unable to load jetton balance');
+  }
+  return { balance: data.balance, walletAddress: data.walletAddress };
+}
+
 function getTokenImage(token: Pick<TokenDetailToken, 'imageUrl'>, index = 0) {
   return token.imageUrl || fallbackImages[index % fallbackImages.length];
 }
@@ -264,11 +277,13 @@ export default function TokenDetailPage() {
   const [sending, setSending] = useState(false);
   const [tradeStatus, setTradeStatus] = useState<string | null>(null);
   const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
+  const [userJettonWalletAddress, setUserJettonWalletAddress] = useState<string | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [balanceNonce, setBalanceNonce] = useState(0);
   const refreshTimers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const refreshDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const optimisticUntil = useRef(0);
   const hasLoadedDetail = useRef(false);
   const address = Array.isArray(params.address) ? params.address[0] : params.address;
   const [tonConnectUI] = useTonConnectUI();
@@ -306,7 +321,7 @@ export default function TokenDetailPage() {
         if (!response.ok) throw new Error('Token detail request failed');
         const nextData = await response.json() as TokenDetailResponse;
         hasLoadedDetail.current = true;
-        setData(nextData);
+        setData((current) => mergeDetailData(current, nextData));
       } catch (requestError) {
         if (!controller.signal.aborted) {
           setError(requestError instanceof Error ? requestError.message : 'Unable to load token');
@@ -357,6 +372,7 @@ export default function TokenDetailPage() {
   useEffect(() => {
     if (!walletAddress || !activeJettonAddress) {
       queueMicrotask(() => setTokenBalance(null));
+      queueMicrotask(() => setUserJettonWalletAddress(null));
       return;
     }
 
@@ -364,19 +380,17 @@ export default function TokenDetailPage() {
     async function loadTokenBalance() {
       setBalanceLoading(true);
       try {
-        const client = new TonClient({
-          endpoint: process.env.NEXT_PUBLIC_TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC',
-        });
-        const result = await client.runMethod(
-          Address.parse(activeJettonAddress),
-          'get_wallet_address',
-          [{ type: 'slice', cell: beginCell().storeAddress(Address.parse(walletAddress)).endCell() }],
-        );
-        const userJettonWallet = result.stack.readAddress();
-        const walletData = await client.runMethod(userJettonWallet, 'get_wallet_data');
-        if (!cancelled) setTokenBalance(walletData.stack.readBigNumber());
-      } catch {
-        if (!cancelled) setTokenBalance(0n);
+        const balance = await fetchJettonBalance(activeJettonAddress, walletAddress);
+        if (!cancelled) {
+          setTokenBalance(BigInt(balance.balance));
+          setUserJettonWalletAddress(balance.walletAddress);
+        }
+      } catch (balanceError) {
+        if (!cancelled) {
+          console.warn('Unable to load jetton balance', balanceError);
+          setTokenBalance(0n);
+          setUserJettonWalletAddress(null);
+        }
       } finally {
         if (!cancelled) setBalanceLoading(false);
       }
@@ -401,6 +415,7 @@ export default function TokenDetailPage() {
     address: token.address,
     virtual_ton_reserves: token.virtualTonReserves,
     virtual_token_reserves: token.virtualTokenReserves,
+    migration_market_cap_ton: token.migrationMarketCapNano,
   } : null;
   const buyQuote = token && tokenQuoteRow && !token.migrated ? quoteBondingCurveBuy(tokenQuoteRow, tradeAmountNano) : null;
   const sellQuote = token && tokenQuoteRow && !token.migrated ? quoteBondingCurveSell(tokenQuoteRow, tradeAmountNano) : null;
@@ -461,6 +476,24 @@ export default function TokenDetailPage() {
       };
     }
     return nextChart;
+  }
+
+  function chartPointCount(chart: TokenDetailResponse['chart']) {
+    return Object.values(chart).reduce((sum, period) => sum + period.data.length, 0);
+  }
+
+  function mergeDetailData(
+    current: TokenDetailResponse | null,
+    nextData: TokenDetailResponse,
+  ): TokenDetailResponse {
+    if (!current || Date.now() > optimisticUntil.current) return nextData;
+    if (chartPointCount(nextData.chart) >= chartPointCount(current.chart)) return nextData;
+
+    return {
+      ...nextData,
+      chart: current.chart,
+      trades: nextData.trades.length >= current.trades.length ? nextData.trades : current.trades,
+    };
   }
 
   function applyOptimisticCurveTrade(type: 'buy' | 'sell') {
@@ -573,15 +606,9 @@ export default function TokenDetailPage() {
         });
       } else {
         if (!token.jettonAddress) throw new Error('Jetton master is missing');
-        const client = new TonClient({
-          endpoint: process.env.NEXT_PUBLIC_TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC',
-        });
-        const result = await client.runMethod(
-          Address.parse(token.jettonAddress),
-          'get_wallet_address',
-          [{ type: 'slice', cell: beginCell().storeAddress(Address.parse(wallet.account.address)).endCell() }],
-        );
-        const userJettonWallet = result.stack.readAddress();
+        const balance = userJettonWalletAddress
+          ? { walletAddress: userJettonWalletAddress }
+          : await fetchJettonBalance(token.jettonAddress, wallet.account.address);
         const queryId = BigInt(Date.now());
         const payload = jettonTransferBody({
           queryId,
@@ -595,13 +622,16 @@ export default function TokenDetailPage() {
           validUntil: Math.floor(Date.now() / 1000) + 300,
           network: TONCONNECT_TESTNET_CHAIN,
           messages: [{
-            address: userJettonWallet.toString({ testOnly: true }),
+            address: balance.walletAddress,
             amount: DEFAULT_SELL_TRANSFER_VALUE.toString(),
             payload: payload.toBoc().toString('base64'),
           }],
         });
       }
-      if (!token.migrated) applyOptimisticCurveTrade(submittedSide);
+      if (!token.migrated) {
+        optimisticUntil.current = Date.now() + 45_000;
+        applyOptimisticCurveTrade(submittedSide);
+      }
       setTradeStatus(null);
       queuePostTradeRefresh();
       setTradeAmount(tradeSide === 'buy' ? '0.1' : '');

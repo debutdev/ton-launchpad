@@ -20,6 +20,8 @@ export const DEFAULT_DEPLOY_VALUE = toNano('0.7');
 export const DEFAULT_SELL_TRANSFER_VALUE = toNano('0.25');
 export const DEFAULT_SELL_FORWARD_TON = toNano('0.15');
 export const TONCONNECT_TESTNET_CHAIN = '-3';
+export const DEFAULT_TESTNET_MIGRATION_MARKET_CAP_NANO =
+  process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO || '2041489812551';
 
 export type DbTokenRow = {
   id?: string | null;
@@ -44,6 +46,7 @@ export type DbTokenRow = {
   market_cap_ton?: string | number | null;
   market_cap_usd?: string | number | null;
   market_cap_usd_snapshot?: string | number | null;
+  migration_market_cap_ton?: string | number | null;
   migration_state?: string | number | null;
   is_migrated?: boolean | null;
   migrated?: boolean | null;
@@ -100,6 +103,10 @@ export function parseNano(value: string | number | null | undefined): bigint {
   } catch {
     return 0n;
   }
+}
+
+export function defaultMigrationMarketCapNano(): bigint {
+  return parseNano(DEFAULT_TESTNET_MIGRATION_MARKET_CAP_NANO);
 }
 
 export function parseDecimalToNano(value: string): bigint {
@@ -200,10 +207,14 @@ export function quoteBondingCurveBuy(row: DbTokenRow, tonIn: bigint) {
   const virtualTokenReserves = parseNano(row.virtual_token_reserves);
   if (tonIn <= 0n || virtualTonReserves <= 0n || virtualTokenReserves <= 0n) return null;
   const quote = getBuyQuote(tonIn, virtualTonReserves, virtualTokenReserves);
+  const migrationCap = parseNano(row.migration_market_cap_ton) || defaultMigrationMarketCapNano();
+  const projectedMarketCap = getMarketCap(quote.newVirtualTonReserves, quote.newVirtualTokenReserves);
   const realTonReserves = parseNano(row.real_ton_reserves);
   const legacyTestnetMigrationThreshold = 200_000_000n;
   const isLegacyTestnetCurve = virtualTonReserves < 1_500_000_000_000n;
-  const gasReserve = isLegacyTestnetCurve && realTonReserves + tonIn >= legacyTestnetMigrationThreshold
+  const gasReserve = migrationCap > 0n && projectedMarketCap >= migrationCap
+    ? MIGRATION_GAS_RESERVE
+    : isLegacyTestnetCurve && realTonReserves + tonIn >= legacyTestnetMigrationThreshold
     ? MIGRATION_GAS_RESERVE
     : getRequiredBuyGasReserve(tonIn, virtualTonReserves, virtualTokenReserves);
   return { ...quote, gasReserve, txValue: tonIn + gasReserve };
@@ -233,6 +244,7 @@ export function normalizeTokenRow(row: DbTokenRow, trades: DbTradeRow[] = []) {
   }
 
   const migrationState = Number(row.migration_state ?? (row.migrated || row.is_migrated ? 2 : 0));
+  const migrationCapNano = parseNano(row.migration_market_cap_ton) || defaultMigrationMarketCapNano();
 
   return {
     id: row.id || null,
@@ -249,6 +261,8 @@ export function normalizeTokenRow(row: DbTokenRow, trades: DbTradeRow[] = []) {
     holders: holderSet.size,
     volumeTon: nanoToNumber(volumeNano),
     progressPercent: getBondingProgress(marketCapNano),
+    migrationMarketCapNano: migrationCapNano.toString(),
+    migrationMarketCapTon: nanoToNumber(migrationCapNano),
     migrationState,
     migrated: Boolean(row.migrated || row.is_migrated || migrationState >= 2),
     stonPoolAddress: row.ston_pool_address || null,
