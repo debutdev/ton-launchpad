@@ -1,10 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const sanitize = (value: string | undefined) => (value || '').replace(/[\r\n\t]/g, '').trim();
-
-const supabaseUrl = sanitize(process.env.NEXT_PUBLIC_SUPABASE_URL);
-const supabaseAnonKey = sanitize(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+import { supabase } from '@/lib/supabase';
 
 type TradeRow = {
   type: 'buy' | 'sell' | string | null;
@@ -54,15 +49,6 @@ async function getTonUsdPrice() {
 }
 
 export async function GET() {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json(
-      { error: 'Supabase environment variables are not configured' },
-      { status: 500 },
-    );
-  }
-
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
   const [{ count, error: tokenError }, tonUsdPrice] = await Promise.all([
     supabase.from('tokens').select('id', { count: 'exact', head: true }),
     getTonUsdPrice(),
