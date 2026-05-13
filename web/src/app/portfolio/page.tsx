@@ -140,10 +140,12 @@ function PortfolioSummaryNumber({
   className?: string;
 }) {
   return (
-    <span className={`portfolio-summary-number ${className}`.trim()}>
-      {prefix}
-      <NumberTicker className="portfolio-summary-number-value" decimalPlaces={decimalPlaces} value={Number.isFinite(value) ? value : 0} />
-    </span>
+    <NumberTicker
+      className={`portfolio-summary-number ${className}`.trim()}
+      decimalPlaces={decimalPlaces}
+      prefix={prefix}
+      value={Number.isFinite(value) ? value : 0}
+    />
   );
 }
 

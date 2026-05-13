@@ -9,13 +9,17 @@ type NumberTickerProps = ComponentPropsWithoutRef<'span'> & {
   direction?: 'up' | 'down';
   delay?: number;
   decimalPlaces?: number;
+  prefix?: string;
+  suffix?: string;
 };
 
-function formatValue(value: number, decimalPlaces: number) {
-  return new Intl.NumberFormat('en-US', {
+function formatValue(value: number, decimalPlaces: number, prefix = '', suffix = '') {
+  const formatted = new Intl.NumberFormat('en-US', {
     minimumFractionDigits: decimalPlaces,
     maximumFractionDigits: decimalPlaces,
   }).format(Number(value.toFixed(decimalPlaces)));
+
+  return `${prefix}${formatted}${suffix}`;
 }
 
 export function NumberTicker({
@@ -25,6 +29,8 @@ export function NumberTicker({
   delay = 0,
   className,
   decimalPlaces = 0,
+  prefix = '',
+  suffix = '',
   ...props
 }: NumberTickerProps) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -53,15 +59,15 @@ export function NumberTicker({
     () =>
       springValue.on('change', (latest) => {
         if (ref.current) {
-          ref.current.textContent = formatValue(latest, decimalPlaces);
+          ref.current.textContent = formatValue(latest, decimalPlaces, prefix, suffix);
         }
       }),
-    [decimalPlaces, springValue],
+    [decimalPlaces, prefix, springValue, suffix],
   );
 
   return (
     <span ref={ref} className={className} {...props}>
-      {formatValue(direction === 'down' ? value : startValue, decimalPlaces)}
+      {formatValue(direction === 'down' ? value : startValue, decimalPlaces, prefix, suffix)}
     </span>
   );
 }
