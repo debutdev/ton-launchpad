@@ -29,6 +29,16 @@ jobs:
       - name: Build contracts
         run: acton build
 
+      - name: Upload Acton build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: acton-build
+          path: |
+            build/acton/*.json
+            build/acton/abi/*.json
+            build/acton/fift/*.fif
+          if-no-files-found: error
+
       - name: Check contracts
         run: acton check --output-format github
 

@@ -80,6 +80,7 @@ fun launchToken(
     factory: LaunchpadFactory,
     owner: Treasury,
     queryId: uint64,
+    expectedMigrationMarketCapTon: coins,
 ): (BondingCurve, FeeJettonMaster) {
     val res = factory.sendDeployToken(
         owner.address,
@@ -98,7 +99,7 @@ fun launchToken(
     val curve = BondingCurve.fromAddress(event.bondingCurveAddress);
     val master = FeeJettonMaster.fromAddress(event.jettonMasterAddress);
     expect(master.getJettonData().adminAddress).toEqual(curve.address);
-    expect(curve.getMarketData().migrationMarketCapTon).toEqual(LOW_TEST_MIGRATION_CAP);
+    expect(curve.getMarketData().migrationMarketCapTon).toEqual(expectedMigrationMarketCapTon);
 
     return (curve, master);
 }
@@ -124,7 +125,7 @@ fun setupFlowWithMigrationCap(migrationMarketCapTon: coins): FlowSetup {
         pton,
         lp,
     );
-    val (curve, master) = launchToken(factory, owner, 100);
+    val (curve, master) = launchToken(factory, owner, 100, migrationMarketCapTon);
 
     return FlowSetup { factory, curve, master, owner, alice, platform, router };
 }
@@ -176,7 +177,7 @@ get fun `test factory launches low cap token`() {
         pton,
         lp,
     );
-    val (curve, master) = launchToken(factory, owner, 1);
+    val (curve, master) = launchToken(factory, owner, 1, LOW_TEST_MIGRATION_CAP);
 
     expect(curve.getJettonMaster()).toEqual(master.address);
     expect(factory.getMigrationMarketCapTon()).toEqual(LOW_TEST_MIGRATION_CAP);
