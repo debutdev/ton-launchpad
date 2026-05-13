@@ -96,6 +96,22 @@ const fallbackImages = [
 ];
 
 const TON_USD_PRICE = 2.454;
+const NANOS_PER_UNIT_LOCAL = 1_000_000_000n;
+const TOTAL_SUPPLY_NANO = 1_000_000_000n * NANOS_PER_UNIT_LOCAL;
+
+function nanoToDisplay(value: bigint) {
+  return Number(value) / 1e9;
+}
+
+function marketCapTonFromReserves(virtualTonReserves: bigint, virtualTokenReserves: bigint) {
+  if (virtualTokenReserves <= 0n) return 0;
+  return nanoToDisplay((virtualTonReserves * TOTAL_SUPPLY_NANO) / virtualTokenReserves);
+}
+
+function priceTonFromReserves(virtualTonReserves: bigint, virtualTokenReserves: bigint) {
+  if (virtualTokenReserves <= 0n) return 0;
+  return nanoToDisplay((virtualTonReserves * NANOS_PER_UNIT_LOCAL) / virtualTokenReserves);
+}
 
 function shortWallet(address: string) {
   return address.length < 12 ? address : `${address.slice(0, 4)}...${address.slice(-4)}`;
@@ -252,7 +268,8 @@ export default function TokenDetailPage() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [balanceNonce, setBalanceNonce] = useState(0);
   const refreshTimers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
-  const previousTradeCount = useRef<number | null>(null);
+  const refreshDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasLoadedDetail = useRef(false);
   const address = Array.isArray(params.address) ? params.address[0] : params.address;
   const [tonConnectUI] = useTonConnectUI();
   const wallet = useTonWallet();
@@ -263,23 +280,14 @@ export default function TokenDetailPage() {
   useEffect(() => () => {
     refreshTimers.current.forEach((timer) => clearTimeout(timer));
     refreshTimers.current = [];
+    if (refreshDebounce.current) clearTimeout(refreshDebounce.current);
   }, []);
-
-  useEffect(() => {
-    const previous = previousTradeCount.current;
-    previousTradeCount.current = liveTradeCount;
-    if (previous === null || liveTradeCount <= previous || !tradeStatus?.startsWith('Transaction sent')) return;
-
-    setTradeStatus('Trade indexed.');
-    const timer = setTimeout(() => setTradeStatus(null), 2500);
-    return () => clearTimeout(timer);
-  }, [liveTradeCount, tradeStatus]);
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function loadTokenDetail() {
-      setLoading(true);
+      if (!hasLoadedDetail.current) setLoading(true);
       setError(null);
       setNotFound(false);
 
@@ -297,6 +305,7 @@ export default function TokenDetailPage() {
 
         if (!response.ok) throw new Error('Token detail request failed');
         const nextData = await response.json() as TokenDetailResponse;
+        hasLoadedDetail.current = true;
         setData(nextData);
       } catch (requestError) {
         if (!controller.signal.aborted) {
@@ -313,7 +322,13 @@ export default function TokenDetailPage() {
 
   useEffect(() => {
     if (!address) return;
-    const refresh = () => setRefreshNonce((value) => value + 1);
+    const refresh = () => {
+      if (refreshDebounce.current) clearTimeout(refreshDebounce.current);
+      refreshDebounce.current = setTimeout(() => {
+        setRefreshNonce((value) => value + 1);
+        setBalanceNonce((value) => value + 1);
+      }, 250);
+    };
     const tokenChannel = supabase
       .channel(`token-detail-token-${address}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tokens', filter: `address=eq.${address}` }, refresh)
@@ -434,6 +449,70 @@ export default function TokenDetailPage() {
     setTradeAmount(formatNanoAmount((tokenBalance * BigInt(percent)) / 100n, 9));
   }
 
+  function appendOptimisticPoint(chart: TokenDetailResponse['chart'], marketCapTon: number) {
+    const timestamp = new Date().toISOString();
+    const nextChart = { ...chart };
+    for (const period of PERIODS) {
+      const current = chart[period.id];
+      nextChart[period.id] = {
+        ...current,
+        data: [...current.data, marketCapTon].slice(-1000),
+        labels: [...current.labels, timestamp].slice(-1000),
+      };
+    }
+    return nextChart;
+  }
+
+  function applyOptimisticCurveTrade(type: 'buy' | 'sell') {
+    if (!token || !data || token.migrated) return;
+    const quote = type === 'buy' ? buyQuote : sellQuote;
+    if (!quote) return;
+
+    const newVirtualTonReserves = quote.newVirtualTonReserves;
+    const newVirtualTokenReserves = quote.newVirtualTokenReserves;
+    const nextMarketCapTon = marketCapTonFromReserves(newVirtualTonReserves, newVirtualTokenReserves);
+    const nextPriceTon = priceTonFromReserves(newVirtualTonReserves, newVirtualTokenReserves);
+    const tonAmount = type === 'buy' ? nanoToDisplay(tradeAmountNano) : nanoToDisplay(sellQuote?.tonOut || 0n);
+    const tokenAmount = type === 'buy' ? nanoToDisplay(buyQuote?.tokensOut || 0n) : nanoToDisplay(tradeAmountNano);
+
+    setData((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        token: {
+          ...current.token,
+          virtualTonReserves: newVirtualTonReserves.toString(),
+          virtualTokenReserves: newVirtualTokenReserves.toString(),
+          marketCapTon: nextMarketCapTon,
+          priceTon: nextPriceTon,
+          volumeTon: current.token.volumeTon + Math.max(0, tonAmount),
+        },
+        chart: appendOptimisticPoint(current.chart, nextMarketCapTon),
+        trades: [
+          {
+            id: `optimistic-${Date.now()}`,
+            type,
+            source: 'bonding_curve',
+            tonAmount,
+            tokenAmount,
+            feeTon: type === 'sell' ? nanoToDisplay(sellQuote?.fee || 0n) : 0,
+            feeTokenAmount: 0,
+            trader: walletAddress,
+            timestamp: new Date().toISOString(),
+            txHash: null,
+          },
+          ...current.trades,
+        ].slice(0, 120),
+      };
+    });
+
+    if (type === 'buy') {
+      setTokenBalance((value) => value === null ? buyQuote?.tokensOut || 0n : value + (buyQuote?.tokensOut || 0n));
+    } else {
+      setTokenBalance((value) => value === null ? value : value > tradeAmountNano ? value - tradeAmountNano : 0n);
+    }
+  }
+
   function queuePostTradeRefresh() {
     refreshTimers.current.forEach((timer) => clearTimeout(timer));
     refreshTimers.current = [];
@@ -441,8 +520,7 @@ export default function TokenDetailPage() {
       setRefreshNonce((value) => value + 1);
       setBalanceNonce((value) => value + 1);
     };
-    refresh();
-    for (const delay of [2_000, 5_000, 10_000, 18_000, 30_000]) {
+    for (const delay of [1_500, 3_500, 7_000, 12_000]) {
       refreshTimers.current.push(setTimeout(refresh, delay));
     }
   }
@@ -462,6 +540,7 @@ export default function TokenDetailPage() {
     setSending(true);
     setTradeStatus('Confirm transaction in your wallet...');
     try {
+      const submittedSide = tradeSide;
       if (token.migrated) {
         const response = await fetch('/api/stonfi/swap-params', {
           method: 'POST',
@@ -522,7 +601,8 @@ export default function TokenDetailPage() {
           }],
         });
       }
-      setTradeStatus('Transaction sent. Waiting for live indexer update...');
+      if (!token.migrated) applyOptimisticCurveTrade(submittedSide);
+      setTradeStatus(null);
       queuePostTradeRefresh();
       setTradeAmount(tradeSide === 'buy' ? '0.1' : '');
     } catch (error) {
