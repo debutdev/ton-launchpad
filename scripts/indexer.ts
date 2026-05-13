@@ -16,11 +16,13 @@ import {
   getMarketCap,
   getPriceInNanotons,
 } from '../lib/bondingCurve';
+import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS } from './deployment_config';
 
 dotenv.config();
 
 const FACTORY_ADDRESS =
   process.env.ACTON_TESTNET_FACTORY_ADDRESS ||
+  CURRENT_ACTON_TESTNET_FACTORY_ADDRESS ||
   process.env.NEXT_PUBLIC_FACTORY_ADDRESS ||
   'EQBcjlqVj-4x5NYsGWmJPyM599BK4lsoyrxPWA4ze9spwo9N';
 const PLATFORM_WALLET_ADDRESS = process.env.TESTNET_PLATFORM_WALLET || process.env.NEXT_PUBLIC_PLATFORM_WALLET || '';

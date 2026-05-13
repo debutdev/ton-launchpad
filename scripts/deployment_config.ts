@@ -1,0 +1,2 @@
+export const CURRENT_ACTON_TESTNET_FACTORY_ADDRESS =
+  'kQD2qJv06ipyoGpbSb-2O6p7NnQvHhAHTvthnrT3zY13s5de';

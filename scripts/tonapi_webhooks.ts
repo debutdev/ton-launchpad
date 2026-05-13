@@ -1,6 +1,7 @@
 import * as dotenv from 'dotenv';
 import { Address } from '@ton/core';
 import { createClient } from '@supabase/supabase-js';
+import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS } from './deployment_config';
 
 dotenv.config();
 
@@ -77,7 +78,14 @@ async function loadWatchedAccounts(): Promise<string[]> {
   if (error) throw new Error(error.message);
 
   const accounts = new Set<string>();
-  accounts.add(rawAddress(process.env.ACTON_TESTNET_FACTORY_ADDRESS || process.env.NEXT_PUBLIC_FACTORY_ADDRESS || ''));
+  accounts.add(
+    rawAddress(
+      process.env.ACTON_TESTNET_FACTORY_ADDRESS ||
+        CURRENT_ACTON_TESTNET_FACTORY_ADDRESS ||
+        process.env.NEXT_PUBLIC_FACTORY_ADDRESS ||
+        '',
+    ),
+  );
   for (const token of (data || []) as TokenRow[]) {
     if (token.address) accounts.add(rawAddress(token.address));
     if (token.ston_pool_address) accounts.add(rawAddress(token.ston_pool_address));
