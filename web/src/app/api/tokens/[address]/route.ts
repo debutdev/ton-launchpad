@@ -109,7 +109,7 @@ export async function GET(
   const [{ data: tradesData, error: tradesError }, { data: trendingTokensData, error: trendingError }] = await Promise.all([
     supabase
       .from('trades')
-      .select('id, token_address, trader_address, user_address, type, source, ton_amount, token_amount, fee_ton, fee_token_amount, market_cap_ton_after, price_ton_after, timestamp, created_at, block_time, tx_hash')
+      .select('id, token_address, trader_address, user_address, type, source, ton_amount, token_amount, fee_ton, fee_token_amount, market_cap_ton_after, price_ton_after, created_at, block_time, tx_hash')
       .eq('token_address', address)
       .order('created_at', { ascending: false })
       .limit(120),
@@ -145,7 +145,7 @@ export async function GET(
       marketCapTonAfter: nanoToNumber(parseNano(trade.market_cap_ton_after)),
       priceTonAfter: nanoToNumber(parseNano(trade.price_ton_after)),
       trader: trade.trader_address || trade.user_address || '',
-      timestamp: trade.block_time || trade.created_at || trade.timestamp || null,
+      timestamp: trade.block_time || trade.created_at || null,
       txHash: trade.tx_hash || null,
     })),
     trending,
