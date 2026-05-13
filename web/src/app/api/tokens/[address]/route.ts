@@ -62,7 +62,24 @@ function fallbackChart(tokenMarketCapTon: number) {
   };
 }
 
-async function loadChart(tokenAddress: string, tokenMarketCapTon: number) {
+function tradeFallbackChart(tokenMarketCapTon: number, trades: DbTradeRow[]) {
+  const points = [...trades]
+    .reverse()
+    .map((trade) => ({
+      value: nanoToNumber(parseNano(trade.market_cap_ton_after)),
+      label: trade.block_time || trade.created_at || trade.timestamp || null,
+    }))
+    .filter((point) => point.value > 0 && point.label);
+
+  if (points.length === 0) return fallbackChart(tokenMarketCapTon);
+
+  return {
+    data: points.map((point) => point.value),
+    labels: points.map((point) => point.label as string),
+  };
+}
+
+async function loadChart(tokenAddress: string, tokenMarketCapTon: number, trades: DbTradeRow[]) {
   const result: Partial<Record<PeriodKey, { data: number[]; labels: string[]; label: string }>> = {};
 
   for (const [period, config] of Object.entries(PERIODS) as Array<[PeriodKey, typeof PERIODS[PeriodKey]]>) {
@@ -75,7 +92,7 @@ async function loadChart(tokenAddress: string, tokenMarketCapTon: number) {
       .limit(config.limit);
 
     if (error || !data || data.length === 0) {
-      result[period] = { ...fallbackChart(tokenMarketCapTon), label: config.label };
+      result[period] = { ...tradeFallbackChart(tokenMarketCapTon, trades), label: config.label };
       continue;
     }
 
@@ -125,7 +142,7 @@ export async function GET(
 
   const trades = (tradesData || []) as DbTradeRow[];
   const token = normalizeTokenRow(tokenRow as unknown as DbTokenRow, trades);
-  const chart = await loadChart(address, token.marketCapTon);
+  const chart = await loadChart(address, token.marketCapTon, trades);
   const trending = ((trendingTokensData || []) as unknown as DbTokenRow[])
     .filter((item) => item.address !== address)
     .slice(0, 5)

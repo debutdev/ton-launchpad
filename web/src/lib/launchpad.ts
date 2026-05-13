@@ -6,6 +6,7 @@ import {
   getPriceInNanotons,
   getRequiredBuyGasReserve,
   getSellQuote,
+  MIGRATION_GAS_RESERVE,
 } from './bondingCurve';
 
 export const OP_DEPLOY_TOKEN = 0x20001;
@@ -199,7 +200,12 @@ export function quoteBondingCurveBuy(row: DbTokenRow, tonIn: bigint) {
   const virtualTokenReserves = parseNano(row.virtual_token_reserves);
   if (tonIn <= 0n || virtualTonReserves <= 0n || virtualTokenReserves <= 0n) return null;
   const quote = getBuyQuote(tonIn, virtualTonReserves, virtualTokenReserves);
-  const gasReserve = getRequiredBuyGasReserve(tonIn, virtualTonReserves, virtualTokenReserves);
+  const realTonReserves = parseNano(row.real_ton_reserves);
+  const legacyTestnetMigrationThreshold = 200_000_000n;
+  const isLegacyTestnetCurve = virtualTonReserves < 1_500_000_000_000n;
+  const gasReserve = isLegacyTestnetCurve && realTonReserves + tonIn >= legacyTestnetMigrationThreshold
+    ? MIGRATION_GAS_RESERVE
+    : getRequiredBuyGasReserve(tonIn, virtualTonReserves, virtualTokenReserves);
   return { ...quote, gasReserve, txValue: tonIn + gasReserve };
 }
 

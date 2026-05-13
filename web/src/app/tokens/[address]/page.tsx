@@ -6,7 +6,7 @@ import { Address, beginCell } from '@ton/core';
 import { TonClient } from '@ton/ton';
 import { Bell, Moon, Search, Sun } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { TopbarNav } from '../../TopbarNav';
 import { useThemeMode } from '../../providers';
 import {
@@ -250,12 +250,19 @@ export default function TokenDetailPage() {
   const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [balanceNonce, setBalanceNonce] = useState(0);
+  const refreshTimers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const address = Array.isArray(params.address) ? params.address[0] : params.address;
   const [tonConnectUI] = useTonConnectUI();
   const wallet = useTonWallet();
   const walletAddress = wallet?.account.address || '';
   const activeJettonAddress = data?.token.jettonAddress || '';
   const liveTradeCount = data?.trades.length || 0;
+
+  useEffect(() => () => {
+    refreshTimers.current.forEach((timer) => clearTimeout(timer));
+    refreshTimers.current = [];
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -353,7 +360,7 @@ export default function TokenDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeJettonAddress, liveTradeCount, walletAddress]);
+  }, [activeJettonAddress, balanceNonce, liveTradeCount, walletAddress]);
 
   const token = data?.token;
   const chartPeriod = data?.chart[activePeriod];
@@ -414,6 +421,19 @@ export default function TokenDetailPage() {
   function setSellPercent(percent: number) {
     if (!tokenBalance || tokenBalance <= 0n) return;
     setTradeAmount(formatNanoAmount((tokenBalance * BigInt(percent)) / 100n, 9));
+  }
+
+  function queuePostTradeRefresh() {
+    refreshTimers.current.forEach((timer) => clearTimeout(timer));
+    refreshTimers.current = [];
+    const refresh = () => {
+      setRefreshNonce((value) => value + 1);
+      setBalanceNonce((value) => value + 1);
+    };
+    refresh();
+    for (const delay of [2_000, 5_000, 10_000, 18_000, 30_000]) {
+      refreshTimers.current.push(setTimeout(refresh, delay));
+    }
   }
 
   async function handleTrade() {
@@ -492,6 +512,7 @@ export default function TokenDetailPage() {
         });
       }
       setTradeStatus('Transaction sent. Waiting for live indexer update...');
+      queuePostTradeRefresh();
       setTradeAmount(tradeSide === 'buy' ? '0.1' : '');
     } catch (error) {
       setTradeStatus(error instanceof Error ? error.message : 'Transaction failed');

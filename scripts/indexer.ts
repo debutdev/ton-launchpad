@@ -796,8 +796,17 @@ async function updateReserves(bcAddress: string): Promise<ReserveSnapshot | null
     const virtualTokenReserves = reader.readBigNumber();
     const realTonReserves = reader.readBigNumber();
     const realTokenReserves = reader.readBigNumber();
-    const currentSupply = reader.readBigNumber();
-    const migrationState = Number(reader.readBigNumber());
+    const fifthValue = reader.readBigNumber();
+    let currentSupply = REAL_TOKEN_SUPPLY - realTokenReserves;
+    let migrationState = fifthValue === 0n ? 0 : 2;
+    try {
+      currentSupply = fifthValue;
+      migrationState = Number(reader.readBigNumber());
+    } catch {
+      // Older testnet curves returned ReserveData as:
+      // virtualTon, virtualToken, realTon, realToken, migrated.
+      // Keep them indexable while the live factory is being rolled forward.
+    }
     const marketCapTon = getMarketCap(virtualTonReserves, virtualTokenReserves);
     const priceTon = getPriceInNanotons(virtualTonReserves, virtualTokenReserves);
     const migrated = migrationState >= 2;
