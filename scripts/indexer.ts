@@ -869,6 +869,12 @@ async function handleTokenDeployed(body: Cell) {
 
   console.log(`New token deployed: ${bcAddrStr}`);
   invalidCurveAddresses.delete(bcAddrStr);
+  const existing = await getTokenRow(bcAddrStr);
+  if (existing) {
+    bondingCurves.set(bcAddrStr, { address: bcAddrStr });
+    return;
+  }
+
   await upsertToken({
     address: bcAddrStr,
     jetton_address: jmAddrStr,
@@ -957,6 +963,7 @@ async function pollBondingCurves() {
             const tokenAmount = before
               ? parseNano(before.real_token_reserves) - reserves.realTokenReserves
               : 0n;
+            if (tokenAmount <= 0n) continue;
             const at = txTime(tx);
             const trade = await upsertTrade({
               token_address: addr,
