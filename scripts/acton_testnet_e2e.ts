@@ -215,7 +215,7 @@ async function main() {
     launchToken: toNano('0.7'),
     buy: toNano('0.25'),
     sell: toNano('0.3'),
-    migrationBuy: toNano('1.2'),
+    migrationBuy: toNano('1.8'),
     postMigrationBuy: toNano('0.45'),
     postMigrationSwap: toNano('0.4'),
   };

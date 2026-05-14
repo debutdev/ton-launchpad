@@ -328,7 +328,7 @@ get fun `test low cap buy migrates and closes minting`() {
             setup.alice.address,
             300,
             0,
-            { value: ton("1.2"), bounce: true },
+            { value: ton("1.8"), bounce: true },
         );
     expect(res).toHaveAllSuccessfulTxs();
 
@@ -348,7 +348,7 @@ get fun `test stonfi swap payload is taxed after migration`() {
             setup.alice.address,
             400,
             0,
-            { value: ton("1.2"), bounce: true },
+            { value: ton("1.8"), bounce: true },
         );
     expect(migrateRes).toHaveAllSuccessfulTxs();
     expect(setup.curve.getMigrationState()).toEqual(MIGRATION_STATE_MIGRATED);
