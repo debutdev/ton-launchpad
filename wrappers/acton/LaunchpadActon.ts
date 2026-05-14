@@ -10,19 +10,18 @@ import {
 
 export const OP_BUY_TOKENS = 0x10001;
 export const OP_SELL_TOKENS = 0x10002;
-export const OP_MIGRATE_TO_STONFI = 0x10003;
-export const OP_CONFIGURE_STONFI = 0x10005;
-export const OP_RETRY_STONFI_MIGRATION = 0x10006;
+export const OP_MIGRATE_TO_DEDUST = 0x10003;
+export const OP_CONFIGURE_DEDUST = 0x10005;
+export const OP_RETRY_DEDUST_MIGRATION = 0x10006;
 export const OP_DEPLOY_TOKEN = 0x20001;
-export const OP_UPDATE_STONFI_CONFIG = 0x20003;
+export const OP_UPDATE_DEDUST_CONFIG = 0x20003;
 export const OP_UPDATE_MIGRATION_MARKET_CAP = 0x20004;
 export const OP_JETTON_TRANSFER = 0x0f8a7ea5;
 
-export type StonfiMigrationConfig = {
-  router: Address;
-  ptonWallet: Address;
-  routerTokenWallet: Address;
-  lpReceiver: Address;
+export type DedustMigrationConfig = {
+  nativeVault: Address;
+  jettonVault: Address;
+  pool: Address;
 };
 
 export type ReserveData = {
@@ -45,22 +44,6 @@ export type MarketData = {
   migrationMarketCapTon: bigint;
   progressBps: bigint;
 };
-
-export function stonfiMigrationConfigCell(config: StonfiMigrationConfig): Cell {
-  const routerConfig = beginCell()
-    .storeAddress(config.router)
-    .storeAddress(config.ptonWallet)
-    .endCell();
-  const receiverConfig = beginCell()
-    .storeAddress(config.routerTokenWallet)
-    .storeAddress(config.lpReceiver)
-    .endCell();
-
-  return beginCell()
-    .storeRef(routerConfig)
-    .storeRef(receiverConfig)
-    .endCell();
-}
 
 export function buyTokensBody(queryId: bigint, minTokensOut: bigint = 0n): Cell {
   return beginCell()
@@ -143,36 +126,38 @@ export class BondingCurveActon implements Contract {
       value,
       bounce: true,
       body: beginCell()
-        .storeUint(OP_MIGRATE_TO_STONFI, 32)
+        .storeUint(OP_MIGRATE_TO_DEDUST, 32)
         .storeUint(queryId, 64)
         .endCell(),
     });
   }
 
-  async sendConfigureStonfi(
+  async sendConfigureDedust(
     provider: ContractProvider,
     via: Sender,
     value: bigint,
     queryId: bigint,
-    config: StonfiMigrationConfig,
+    config: DedustMigrationConfig,
   ): Promise<void> {
     await provider.internal(via, {
       value,
       bounce: true,
       body: beginCell()
-        .storeUint(OP_CONFIGURE_STONFI, 32)
+        .storeUint(OP_CONFIGURE_DEDUST, 32)
         .storeUint(queryId, 64)
-        .storeRef(stonfiMigrationConfigCell(config))
+        .storeAddress(config.nativeVault)
+        .storeAddress(config.jettonVault)
+        .storeAddress(config.pool)
         .endCell(),
     });
   }
 
-  async sendRetryStonfi(provider: ContractProvider, via: Sender, value: bigint, queryId: bigint): Promise<void> {
+  async sendRetryDedust(provider: ContractProvider, via: Sender, value: bigint, queryId: bigint): Promise<void> {
     await provider.internal(via, {
       value,
       bounce: true,
       body: beginCell()
-        .storeUint(OP_RETRY_STONFI_MIGRATION, 32)
+        .storeUint(OP_RETRY_DEDUST_MIGRATION, 32)
         .storeUint(queryId, 64)
         .endCell(),
     });
@@ -284,20 +269,20 @@ export class LaunchpadFactoryActon implements Contract {
     });
   }
 
-  async sendUpdateStonfiConfig(
+  async sendUpdateDedustConfig(
     provider: ContractProvider,
     via: Sender,
     value: bigint,
     queryId: bigint,
-    config: StonfiMigrationConfig,
+    nativeVault: Address,
   ): Promise<void> {
     await provider.internal(via, {
       value,
       bounce: true,
       body: beginCell()
-        .storeUint(OP_UPDATE_STONFI_CONFIG, 32)
+        .storeUint(OP_UPDATE_DEDUST_CONFIG, 32)
         .storeUint(queryId, 64)
-        .storeRef(stonfiMigrationConfigCell(config))
+        .storeAddress(nativeVault)
         .endCell(),
     });
   }

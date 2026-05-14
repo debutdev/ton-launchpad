@@ -70,7 +70,7 @@ fun getSellTaxAmount(
     }
 
     val op = opFromForwardPayload(forwardPayload);
-    if (op == OP_STONFI_SWAP) {
+    if (op == OP_DEDUST_JETTON_SWAP) {
         return (amount * SELL_TAX_BPS) / BPS_DENOMINATOR;
     }
 

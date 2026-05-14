@@ -11,6 +11,7 @@
   "dependencies": {
     "@coinbase/cds-web": "^8.69.1",
     "@coinbase/cds-web-visualization": "^3.7.0",
+    "@dedust/sdk": "^0.8.7",
     "@ston-fi/api": "^0.32.0",
     "@ston-fi/sdk": "^2.7.0",
     "@supabase/supabase-js": "^2.105.3",

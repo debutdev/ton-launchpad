@@ -63,21 +63,18 @@ fun LaunchpadFactory.sendDeployToken(
     return net.send(from, genericMsg);
 }
 
-fun LaunchpadFactory.sendUpdateFactoryStonfiConfig(
+fun LaunchpadFactory.sendUpdateFactoryDedustConfig(
     self,
     from: address,
     queryId: uint64,
-    config_: StonfiMigrationConfig,
+    nativeVault: address,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: UpdateFactoryStonfiConfig {
-            queryId,
-            config: config_.toCell(),
-        },
+        body: UpdateFactoryDedustConfig { queryId, nativeVault },
     });
     return net.send(from, genericMsg);
 }

@@ -63,7 +63,7 @@ export type DbTradeRow = {
   user_address?: string | null;
   trader_address?: string | null;
   type?: 'buy' | 'sell' | string | null;
-  source?: 'bonding_curve' | 'stonfi' | string | null;
+  source?: 'bonding_curve' | 'dedust' | string | null;
   ton_amount?: string | number | null;
   token_amount?: string | number | null;
   fee_ton?: string | number | null;

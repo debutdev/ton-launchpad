@@ -4,19 +4,10 @@ import "@contracts/acton/constants"
 import "@contracts/acton/helpers"
 import "@contracts/acton/messages"
 
-struct BondingStonfiConfig {
-    routerConfig: Cell<BondingStonfiRouterConfig>
-    receiverConfig: Cell<BondingStonfiReceiverConfig>
-}
-
-struct BondingStonfiRouterConfig {
-    router: address
-    ptonWallet: address
-}
-
-struct BondingStonfiReceiverConfig {
-    routerTokenWallet: address
-    lpReceiver: address
+struct BondingDedustConfig {
+    nativeVault: address
+    jettonVault: address
+    pool: address
 }
 
 struct BondingCodeConfig {
@@ -29,6 +20,10 @@ struct BondingIdentityConfig {
     platformWallet: address
 }
 
+struct BondingOwnerConfig {
+    owner: address
+}
+
 struct BondingStorage {
     virtualTonReserves: coins
     virtualTokenReserves: coins
@@ -39,7 +34,8 @@ struct BondingStorage {
     createdAt: uint32
     migrationMarketCapTon: coins
     identityConfig: Cell<BondingIdentityConfig>
-    stonfiConfig: Cell<BondingStonfiConfig>
+    ownerConfig: Cell<BondingOwnerConfig>
+    dedustConfig: Cell<BondingDedustConfig>
     codeConfig: Cell<BondingCodeConfig>
 }
 
@@ -134,12 +130,18 @@ fun quoteSellTon(
     return virtualTonReserves - newVirtualTonReserves;
 }
 
-fun isStonfiConfigured(storage: BondingStorage): bool {
-    val config = storage.stonfiConfig.load();
-    val routerConfig = config.routerConfig.load();
-    val receiverConfig = config.receiverConfig.load();
-    return routerConfig.router != DEAD_ADDRESS && routerConfig.ptonWallet != DEAD_ADDRESS &&
-    receiverConfig.routerTokenWallet != DEAD_ADDRESS;
+fun isDedustConfigured(storage: BondingStorage): bool {
+    val config = storage.dedustConfig.load();
+    return config.nativeVault != DEAD_ADDRESS &&
+        config.jettonVault != DEAD_ADDRESS &&
+        config.pool != DEAD_ADDRESS;
+}
+
+fun isMigrationAdmin(storage: BondingStorage, sender: address): bool {
+    val identity = storage.identityConfig.load();
+    return sender == identity.platformWallet ||
+        sender == identity.creator ||
+        sender == storage.ownerConfig.load().owner;
 }
 
 fun ownJettonWallet(storage: BondingStorage): address {
@@ -186,42 +188,71 @@ fun sendMint(
     mintMsg.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 }
 
-fun makeStonfiProvidePayload(
-    routerWalletAddress: address,
-    refundAddress: address,
-    excessesAddress: address,
-    receiverAddress: address,
-    deadline: int,
-): Cell<StonfiProvideLiquidity> {
-    return StonfiProvideLiquidity {
-        routerWalletAddress,
-        refundAddress,
-        excessesAddress,
-        deadline,
-        additionalData: StonfiProvideLiquidityData {
-            minLpOut: 1,
-            receiverAddress,
-            bothPositive: 1,
-            fwdGas: 0,
-            customPayload: null,
-        }.toCell(),
-    }.toCell();
+fun makeDedustNativeAsset(): slice {
+    return beginCell().storeUint(0, 4).endCell().beginParse();
 }
 
-fun sendStonfiLiquidity(storage: BondingStorage, queryId: int, tokenAmount: coins, now: int): void {
-    val deadline = now + 900;
+fun makeDedustJettonAsset(jettonMaster: address): slice {
+    val (workchain, hash) = jettonMaster.getWorkchainAndHash();
+    return beginCell()
+        .storeUint(1, 4)
+        .storeInt(workchain, 8)
+        .storeUint(hash, 256)
+        .endCell()
+        .beginParse();
+}
+
+fun makeDedustJettonDepositPayload(storage: BondingStorage, tonAmount: coins, tokenAmount: coins): cell {
+    val identity = storage.identityConfig.load();
+    val none: cell? = null;
+    return beginCell()
+        .storeUint(OP_DEDUST_JETTON_DEPOSIT_LIQUIDITY, 32)
+        .storeUint(0, 1)
+        .storeSlice(makeDedustNativeAsset())
+        .storeSlice(makeDedustJettonAsset(identity.jettonMaster))
+        .storeCoins(1)
+        .storeCoins(tonAmount)
+        .storeCoins(tokenAmount)
+        .storeMaybeRef(none)
+        .storeMaybeRef(none)
+        .endCell();
+}
+
+fun makeDedustNativeDepositBody(
+    storage: BondingStorage,
+    queryId: int,
+    tonAmount: coins,
+    tokenAmount: coins,
+): cell {
+    val identity = storage.identityConfig.load();
+    val none: cell? = null;
+    val targetBalances = beginCell()
+        .storeCoins(1)
+        .storeCoins(tonAmount)
+        .storeCoins(tokenAmount)
+        .endCell();
+
+    return beginCell()
+        .storeUint(OP_DEDUST_NATIVE_DEPOSIT_LIQUIDITY, 32)
+        .storeUint(queryId, 64)
+        .storeCoins(tonAmount)
+        .storeUint(0, 1)
+        .storeSlice(makeDedustNativeAsset())
+        .storeSlice(makeDedustJettonAsset(identity.jettonMaster))
+        .storeRef(targetBalances)
+        .storeMaybeRef(none)
+        .storeMaybeRef(none)
+        .endCell();
+}
+
+fun sendDedustLiquidity(storage: BondingStorage, queryId: int, tokenAmount: coins): void {
     val ownWallet = ownJettonWallet(storage);
     val identity = storage.identityConfig.load();
-    val config = storage.stonfiConfig.load();
-    val routerConfig = config.routerConfig.load();
-    val receiverConfig = config.receiverConfig.load();
-
-    val jettonLegPayload = makeStonfiProvidePayload(
-        routerConfig.ptonWallet,
-        contract.getAddress(),
-        identity.platformWallet,
-        receiverConfig.lpReceiver,
-        deadline,
+    val config = storage.dedustConfig.load();
+    val jettonLegPayload = makeDedustJettonDepositPayload(
+        storage,
+        storage.realTonReserves,
+        tokenAmount,
     );
 
     val jettonLiquidityMsg = createMessage({
@@ -231,33 +262,25 @@ fun sendStonfiLiquidity(storage: BondingStorage, queryId: int, tokenAmount: coin
         body: JettonTransfer {
             queryId,
             amount: tokenAmount,
-            destination: routerConfig.router,
+            destination: config.jettonVault,
             responseDestination: identity.platformWallet,
             customPayload: null,
             forwardTonAmount: 235000000,
-            forwardPayload: refForwardPayload(jettonLegPayload as cell),
+            forwardPayload: refForwardPayload(jettonLegPayload),
         },
     });
     jettonLiquidityMsg.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 
-    val tonLegPayload = makeStonfiProvidePayload(
-        receiverConfig.routerTokenWallet,
-        contract.getAddress(),
-        identity.platformWallet,
-        receiverConfig.lpReceiver,
-        deadline,
-    );
-
     val tonLiquidityMsg = createMessage({
         bounce: BounceMode.Only256BitsOfBody,
         value: storage.realTonReserves + 310000000,
-        dest: routerConfig.ptonWallet,
-        body: PtonTonTransfer {
+        dest: config.nativeVault,
+        body: makeDedustNativeDepositBody(
+            storage,
             queryId,
-            tonAmount: storage.realTonReserves,
-            refundAddress: contract.getAddress(),
-            forwardPayload: tonLegPayload,
-        },
+            storage.realTonReserves,
+            tokenAmount,
+        ),
     });
     tonLiquidityMsg.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 
@@ -276,7 +299,7 @@ fun beginMigration(mutatingStorage: BondingStorage, queryId: int): BondingStorag
         storage.migrationState == MIGRATION_STATE_ACTIVE ||
         storage.migrationState == MIGRATION_STATE_FAILED
     ) throw 601;
-    assert (isStonfiConfigured(storage)) throw 602;
+    assert (isDedustConfigured(storage)) throw 602;
 
     val remainingToMint = TOTAL_SUPPLY - storage.currentSupply;
     assert (remainingToMint > 0) throw 603;
@@ -306,14 +329,14 @@ fun beginMigration(mutatingStorage: BondingStorage, queryId: int): BondingStorag
 type BondingAllowedMessage =
     | BuyTokens
     | JettonNotification
-    | MigrateToStonfi
-    | ConfigureStonfiMigration
-    | RetryStonfiMigration
+    | MigrateToDedust
+    | ConfigureDedustMigration
+    | RetryDedustMigration
 
 contract BondingCurve {
     author: "Tonked"
     version: "0.1.0"
-    description: "Pump.fun-style bonding curve with STON.fi migration"
+    description: "Pump.fun-style bonding curve with DeDust migration"
     storage: BondingStorage
     incomingMessages: BondingAllowedMessage
 }
@@ -387,7 +410,7 @@ fun onInternalMessage(in: InMessage) {
                 50000000,
             );
 
-            if (crossesMigration && isStonfiConfigured(storage)) {
+            if (crossesMigration && isDedustConfigured(storage)) {
                 storage = beginMigration(storage, msg.queryId);
             }
 
@@ -403,7 +426,7 @@ fun onInternalMessage(in: InMessage) {
 
             if (op == OP_INTERNAL_MIGRATION_MINT) {
                 assert (storage.migrationState == MIGRATION_STATE_MIGRATING) throw 613;
-                sendStonfiLiquidity(storage, msg.queryId, msg.amount, in.createdAt);
+                sendDedustLiquidity(storage, msg.queryId, msg.amount);
                 storage.migrationState = MIGRATION_STATE_MIGRATED;
                 storage.save();
                 return;
@@ -467,51 +490,34 @@ fun onInternalMessage(in: InMessage) {
             burnMsg.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
         }
 
-        MigrateToStonfi => {
+        MigrateToDedust => {
             var storage = BondingStorage.load();
-            val identity = storage.identityConfig.load();
             assert (storage.migrationState == MIGRATION_STATE_ACTIVE) throw 619;
             assert (
                 getMarketCapTon(storage.virtualTonReserves, storage.virtualTokenReserves) >=
                 storage.migrationMarketCapTon
             ) throw 620;
-            assert (
-                in.senderAddress == identity.platformWallet || in.senderAddress == identity.creator
-            ) throw 621;
+            assert (isMigrationAdmin(storage, in.senderAddress)) throw 621;
             storage = beginMigration(storage, msg.queryId);
             storage.save();
         }
 
-        ConfigureStonfiMigration => {
+        ConfigureDedustMigration => {
             var storage = BondingStorage.load();
-            val identity = storage.identityConfig.load();
-            assert (
-                in.senderAddress == identity.platformWallet || in.senderAddress == identity.creator
-            ) throw 622;
+            assert (isMigrationAdmin(storage, in.senderAddress)) throw 622;
             assert (storage.migrationState == MIGRATION_STATE_ACTIVE) throw 623;
 
-            val config = msg.config.load();
-            val routerConfig = config.routerConfig.load();
-            val receiverConfig = config.receiverConfig.load();
-            storage.stonfiConfig = BondingStonfiConfig {
-                routerConfig: BondingStonfiRouterConfig {
-                    router: routerConfig.router,
-                    ptonWallet: routerConfig.ptonWallet,
-                }.toCell(),
-                receiverConfig: BondingStonfiReceiverConfig {
-                    routerTokenWallet: receiverConfig.routerTokenWallet,
-                    lpReceiver: receiverConfig.lpReceiver,
-                }.toCell(),
+            storage.dedustConfig = BondingDedustConfig {
+                nativeVault: msg.nativeVault,
+                jettonVault: msg.jettonVault,
+                pool: msg.pool,
             }.toCell();
             storage.save();
         }
 
-        RetryStonfiMigration => {
+        RetryDedustMigration => {
             var storage = BondingStorage.load();
-            val identity = storage.identityConfig.load();
-            assert (
-                in.senderAddress == identity.platformWallet || in.senderAddress == identity.creator
-            ) throw 624;
+            assert (isMigrationAdmin(storage, in.senderAddress)) throw 624;
             assert (storage.migrationState == MIGRATION_STATE_FAILED) throw 625;
             storage = beginMigration(storage, msg.queryId);
             storage.save();

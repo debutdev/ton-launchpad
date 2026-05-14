@@ -653,7 +653,7 @@ export default function TokenDetailPage() {
     try {
       const submittedSide = tradeSide;
       if (token.migrated) {
-        const response = await fetch('/api/stonfi/swap-params', {
+        const response = await fetch('/api/dedust/swap-params', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -665,7 +665,7 @@ export default function TokenDetailPage() {
           }),
         });
         const swap = await response.json() as { address?: string; amount?: string; payload?: string; error?: string };
-        if (!response.ok || !swap.address || !swap.amount) throw new Error(swap.error || 'Unable to build STON.fi swap');
+        if (!response.ok || !swap.address || !swap.amount) throw new Error(swap.error || 'Unable to build DeDust swap');
         await tonConnectUI.sendTransaction({
           validUntil: Math.floor(Date.now() / 1000) + 300,
           network: TONCONNECT_TESTNET_CHAIN,
@@ -957,12 +957,12 @@ export default function TokenDetailPage() {
                   <div className="token-detail-trade-quote">
                     <span>
                       {token.migrated
-                        ? `Estimated ${tradeSide === 'buy' ? 'STON.fi receive' : 'STON.fi return'}`
+                        ? `Estimated ${tradeSide === 'buy' ? 'DeDust receive' : 'DeDust return'}`
                         : tradeSide === 'buy' ? 'Estimated receive' : 'Estimated return after 2% sell fee'}
                     </span>
                     <strong>
                       {token.migrated
-                        ? 'Quoted by STON.fi on submit'
+                        ? 'Quoted by DeDust on submit'
                         : tradeSide === 'buy'
                           ? `${compactNumber(Number(buyQuote?.tokensOut || 0n) / 1e9, { maximumFractionDigits: 2 })} ${token.ticker}`
                           : formatTon(Number(sellQuote?.tonOut || 0n) / 1e9, { maximumFractionDigits: 6 })}
@@ -1005,7 +1005,7 @@ export default function TokenDetailPage() {
                       <div><span>Price</span><strong>{formatPrice(token.priceTon)}</strong></div>
                       <div><span>Volume</span><strong>{formatTon(token.volumeTon)}</strong></div>
                       <div><span>Holders</span><strong>{compactNumber(token.holders)}</strong></div>
-                      <div><span>Status</span><strong>{token.migrated ? 'STON.fi' : 'Bonding'}</strong></div>
+                      <div><span>Status</span><strong>{token.migrated ? 'DeDust' : 'Bonding'}</strong></div>
                       <div><span>Created</span><strong>{formatTimeAgo(token.createdAt)}</strong></div>
                     </div>
                   </section>

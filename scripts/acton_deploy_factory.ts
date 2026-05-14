@@ -41,14 +41,10 @@ function factoryInitData(args: {
   owner: Address;
   platformWallet: Address;
   migrationMarketCapTon: bigint;
-  stonfiRouter: Address;
-  ptonWallet: Address;
-  lpReceiver: Address;
+  dedustNativeVault: Address;
 }): Cell {
-  const stonfiConfig = beginCell()
-    .storeAddress(args.stonfiRouter)
-    .storeAddress(args.ptonWallet)
-    .storeAddress(args.lpReceiver)
+  const dedustConfig = beginCell()
+    .storeAddress(args.dedustNativeVault)
     .endCell();
 
   const codeConfig = beginCell()
@@ -62,7 +58,7 @@ function factoryInitData(args: {
     .storeAddress(args.platformWallet)
     .storeUint(0, 32)
     .storeCoins(args.migrationMarketCapTon)
-    .storeRef(stonfiConfig)
+    .storeRef(dedustConfig)
     .storeRef(codeConfig)
     .endCell();
 }
@@ -143,10 +139,8 @@ async function main() {
     walletId: { networkGlobalId: -239 },
   });
   const platformWallet = requireAddress('TESTNET_PLATFORM_WALLET');
-  const stonfiRouter = requireAddress('STONFI_ROUTER_ADDRESS');
-  const ptonWallet = requireAddress('STONFI_PTON_WALLET_ADDRESS');
-  const lpReceiver = process.env.STONFI_LP_RECEIVER_ADDRESS
-    ? Address.parse(process.env.STONFI_LP_RECEIVER_ADDRESS)
+  const dedustNativeVault = process.env.DEDUST_NATIVE_VAULT
+    ? Address.parse(process.env.DEDUST_NATIVE_VAULT)
     : DEAD_ADDRESS;
 
   const factoryInit = {
@@ -155,9 +149,7 @@ async function main() {
       owner: wallet.address,
       platformWallet,
       migrationMarketCapTon: migrationCap,
-      stonfiRouter,
-      ptonWallet,
-      lpReceiver,
+      dedustNativeVault,
     }),
   };
   const factory = contractAddress(0, factoryInit);
@@ -166,6 +158,7 @@ async function main() {
   console.log(`Factory: ${factory.toString({ testOnly: true })}`);
   console.log(`Factory raw: ${factory.toRawString()}`);
   console.log(`Platform fee wallet owner: ${platformWallet.toString({ testOnly: true })}`);
+  console.log(`Default DeDust native vault: ${dedustNativeVault.toString({ testOnly: true })}`);
   console.log(`Migration cap: ${Number(migrationCap) / 1e9} TON market cap`);
   console.log(`Deploy value: ${Number(deployValue) / 1e9} TON`);
 

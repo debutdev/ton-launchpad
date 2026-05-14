@@ -80,7 +80,7 @@ fun BondingCurve.sendJettonNotification(
     return net.send(from, genericMsg);
 }
 
-fun BondingCurve.sendMigrateToStonfi(
+fun BondingCurve.sendMigrateToDedust(
     self,
     from: address,
     queryId: uint64,
@@ -90,31 +90,30 @@ fun BondingCurve.sendMigrateToStonfi(
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: MigrateToStonfi { queryId },
+        body: MigrateToDedust { queryId },
     });
     return net.send(from, genericMsg);
 }
 
-fun BondingCurve.sendConfigureStonfiMigration(
+fun BondingCurve.sendConfigureDedustMigration(
     self,
     from: address,
     queryId: uint64,
-    config_: StonfiMigrationConfig,
+    nativeVault: address,
+    jettonVault: address,
+    pool: address,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: ConfigureStonfiMigration {
-            queryId,
-            config: config_.toCell(),
-        },
+        body: ConfigureDedustMigration { queryId, nativeVault, jettonVault, pool },
     });
     return net.send(from, genericMsg);
 }
 
-fun BondingCurve.sendRetryStonfiMigration(
+fun BondingCurve.sendRetryDedustMigration(
     self,
     from: address,
     queryId: uint64,
@@ -124,7 +123,7 @@ fun BondingCurve.sendRetryStonfiMigration(
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: RetryStonfiMigration { queryId },
+        body: RetryDedustMigration { queryId },
     });
     return net.send(from, genericMsg);
 }

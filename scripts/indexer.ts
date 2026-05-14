@@ -4,7 +4,7 @@ import * as http from 'http';
 import * as path from 'path';
 import { Address, beginCell, Cell, Slice } from '@ton/core';
 import { TonClient } from '@ton/ton';
-import { DEX } from '@ston-fi/sdk';
+import { Asset, Factory, Pool, PoolType } from '@dedust/sdk';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   INITIAL_VIRTUAL_TOKENS,
@@ -27,8 +27,12 @@ const FACTORY_ADDRESS =
   'EQBcjlqVj-4x5NYsGWmJPyM599BK4lsoyrxPWA4ze9spwo9N';
 const PLATFORM_WALLET_ADDRESS = process.env.TESTNET_PLATFORM_WALLET || process.env.NEXT_PUBLIC_PLATFORM_WALLET || '';
 const PLATFORM_WALLET = PLATFORM_WALLET_ADDRESS ? Address.parse(PLATFORM_WALLET_ADDRESS) : null;
-const STONFI_ROUTER = process.env.STONFI_ROUTER_ADDRESS ? Address.parse(process.env.STONFI_ROUTER_ADDRESS) : null;
-const STONFI_PTON_PROXY = process.env.STONFI_PTON_PROXY_ADDRESS ? Address.parse(process.env.STONFI_PTON_PROXY_ADDRESS) : null;
+const DEFAULT_DEDUST_FACTORY_ADDRESS = 'EQBfBWT7X2BHg9tXAxzhz2aKiNTU1tpt5NsiK0uSDW_YAJ67';
+const DEDUST_FACTORY_ADDRESS =
+  process.env.DEDUST_FACTORY_ADDRESS ||
+  process.env.NEXT_PUBLIC_DEDUST_FACTORY_ADDRESS ||
+  DEFAULT_DEDUST_FACTORY_ADDRESS;
+const DEDUST_FACTORY = DEDUST_FACTORY_ADDRESS ? Address.parse(DEDUST_FACTORY_ADDRESS) : null;
 const LIVE_EVENTS_WEBHOOK_URL = process.env.LIVE_EVENTS_WEBHOOK_URL || '';
 const LIVE_EVENTS_SECRET = process.env.LIVE_EVENTS_SECRET || '';
 const FACTORY_POLL_INTERVAL_MS = Number(process.env.INDEXER_FACTORY_POLL_INTERVAL_MS || 12000);
@@ -50,8 +54,6 @@ const OP_SELL_TOKENS = 0x10002;
 const OP_JETTON_NOTIFICATION = 0x7362d09c;
 const OP_MINT = 0x642b7d07;
 const OP_JETTON_TRANSFER_INTERNAL = 0x178d4519;
-const OP_STONFI_SWAP = 0x6664de2a;
-const OP_STONFI_PAY_TO = 0x657b54f5;
 const BUY_GAS_RESERVE = 100000000n;
 const MIGRATION_GAS_RESERVE = 1200000000n;
 const SELL_TAX_NUMERATOR = 2n;
@@ -82,38 +84,18 @@ type ReserveSnapshot = {
   priceTon: bigint;
 };
 
-type StonPoolState = {
+type DexPoolState = {
   tokenAddress: string;
   jettonAddress: string;
   lastReserve0: bigint;
   lastReserve1: bigint;
   tokenReserveIndex: 0 | 1 | null;
-  token0WalletAddress?: string;
-  token1WalletAddress?: string;
-  customRouterWalletAddress?: string;
 };
 
-type StonPoolData = {
+type DexPoolData = {
   reserve0: bigint;
   reserve1: bigint;
-  token0WalletAddress: Address;
-  token1WalletAddress: Address;
-};
-
-type StonfiPoolSwap = {
-  fromUser: Address;
-  amount0In: bigint;
-  amount1In: bigint;
-};
-
-type StonfiPayTo = {
-  toAddress: Address;
-  originalCaller: Address;
-  exitCode: number;
-  amount0Out: bigint;
-  amount1Out: bigint;
-  token0Address: Address;
-  token1Address: Address;
+  assets: [Asset, Asset];
 };
 
 type TonapiWebhookBody = {
@@ -134,7 +116,7 @@ const supabase: SupabaseClient = createClient(
 
 const seenTxs = new Set<string>();
 const bondingCurves = new Map<string, { address: string }>();
-const stonPools = new Map<string, StonPoolState>();
+const dexPools = new Map<string, DexPoolState>();
 const pollRunning = new Map<string, boolean>();
 const lastRetryLog = new Map<string, number>();
 const invalidCurveAddresses = new Set<string>();
@@ -395,11 +377,11 @@ async function processTonapiWebhook(event: TonapiWebhookBody) {
     return;
   }
 
-  const pools = Array.from(stonPools.keys());
+  const pools = Array.from(dexPools.keys());
   const poolIndex = findAddressIndex(pools, account);
   if (poolIndex >= 0) {
     poolCursor = poolIndex;
-    await pollStonfiPools();
+    await pollDedustPools();
     return;
   }
 
@@ -553,45 +535,24 @@ async function upsertTrade(record: Record<string, unknown>) {
   return data;
 }
 
-async function getRouterWalletAddress(jettonMaster: Address): Promise<Address | null> {
-  if (!STONFI_ROUTER) return null;
-  try {
-    const result = await retry('get_wallet_address(router)', () =>
-      client.runMethod(jettonMaster, 'get_wallet_address', [
-        { type: 'slice', cell: beginCell().storeAddress(STONFI_ROUTER).endCell() },
-      ]),
-    );
-    return result.stack.readAddress();
-  } catch (error) {
-    console.error('Router wallet lookup error:', error instanceof Error ? error.message : error);
-    return null;
-  }
-}
-
-async function ensureStonPoolState(poolAddress: string, state: StonPoolState, data: StonPoolData) {
-  state.token0WalletAddress = data.token0WalletAddress.toString();
-  state.token1WalletAddress = data.token1WalletAddress.toString();
-
+async function ensureDexPoolState(poolAddress: string, state: DexPoolState, data: DexPoolData) {
   if (state.tokenReserveIndex !== null) return;
 
-  const customRouterWallet = await getRouterWalletAddress(Address.parse(state.jettonAddress));
-  if (customRouterWallet) {
-    state.customRouterWalletAddress = customRouterWallet.toString();
-    if (sameAddress(customRouterWallet, data.token0WalletAddress)) {
-      state.tokenReserveIndex = 0;
-      return;
-    }
-    if (sameAddress(customRouterWallet, data.token1WalletAddress)) {
-      state.tokenReserveIndex = 1;
-      return;
-    }
+  const tokenAsset = Asset.jetton(Address.parse(state.jettonAddress));
+  if (data.assets[0].equals(tokenAsset)) {
+    state.tokenReserveIndex = 0;
+    return;
+  }
+  if (data.assets[1].equals(tokenAsset)) {
+    state.tokenReserveIndex = 1;
+    return;
   }
 
   state.tokenReserveIndex = 0;
-  console.warn(`Could not match custom router wallet for STON.fi pool ${poolAddress}; falling back to token0 as custom token`);
+  console.warn(`Could not match custom token asset for DeDust pool ${poolAddress}; falling back to reserve0 as custom token`);
 }
 
-function poolMarketData(state: StonPoolState, data: StonPoolData) {
+function poolMarketData(state: DexPoolState, data: DexPoolData) {
   const tokenReserve = state.tokenReserveIndex === 1 ? data.reserve1 : data.reserve0;
   const tonReserve = state.tokenReserveIndex === 1 ? data.reserve0 : data.reserve1;
   const marketCapTon = tokenReserve > 0n ? (tonReserve * TOTAL_SUPPLY) / tokenReserve : 0n;
@@ -599,106 +560,7 @@ function poolMarketData(state: StonPoolState, data: StonPoolData) {
   return { tokenReserve, tonReserve, marketCapTon, priceTon };
 }
 
-function parsePoolSwapBody(body: Cell): StonfiPoolSwap | null {
-  const parse = (skipQueryId: boolean): StonfiPoolSwap | null => {
-    try {
-      const slice = body.beginParse();
-      if (slice.loadUint(32) !== OP_STONFI_SWAP) return null;
-      if (skipQueryId) slice.loadUintBig(64);
-      const fromUser = slice.loadAddress();
-      const amount0In = slice.loadCoins();
-      const amount1In = slice.loadCoins();
-      if (amount0In <= 0n && amount1In <= 0n) return null;
-      return { fromUser, amount0In, amount1In };
-    } catch {
-      return null;
-    }
-  };
-
-  return parse(true) || parse(false);
-}
-
-function parsePayToBody(body: Cell): StonfiPayTo | null {
-  try {
-    const slice = body.beginParse();
-    if (slice.loadUint(32) !== OP_STONFI_PAY_TO) return null;
-    slice.loadUintBig(64);
-    const toAddress = slice.loadAddress();
-    slice.loadAddress();
-    const originalCaller = slice.loadAddress();
-    const exitCode = slice.loadUint(32);
-    readMaybeRef(slice);
-    if (slice.remainingRefs === 0) return null;
-    const additional = slice.loadRef().beginParse();
-    additional.loadCoins();
-    const amount0Out = additional.loadCoins();
-    const token0Address = additional.loadAddress();
-    const amount1Out = additional.loadCoins();
-    const token1Address = additional.loadAddress();
-    return { toAddress, originalCaller, exitCode, amount0Out, amount1Out, token0Address, token1Address };
-  } catch {
-    return null;
-  }
-}
-
-function findPayTo(tx: Awaited<ReturnType<TonClient['getTransactions']>>[number]): StonfiPayTo | null {
-  for (const outMsg of tx.outMessages.values()) {
-    if (!outMsg.body) continue;
-    const payTo = parsePayToBody(outMsg.body);
-    if (payTo) return payTo;
-  }
-  return null;
-}
-
-async function recordExactStonfiSwap(args: {
-  tokenAddress: string;
-  poolAddress: string;
-  txHash: string;
-  txLt: string;
-  at: string;
-  type: 'buy' | 'sell';
-  trader: Address;
-  tokenAmount: bigint;
-  tonAmount: bigint;
-  marketCapTon: bigint;
-  priceTon: bigint;
-  feeTokenAmount: bigint;
-}) {
-  const trade = await upsertTrade({
-    token_address: args.tokenAddress,
-    trader_address: args.trader.toString(),
-    user_address: args.trader.toString(),
-    type: args.type,
-    source: 'stonfi',
-    ton_amount: args.tonAmount.toString(),
-    token_amount: args.tokenAmount.toString(),
-    fee_ton: '0',
-    fee_token_amount: args.feeTokenAmount.toString(),
-    platform_revenue_token_amount: args.feeTokenAmount.toString(),
-    token_price_ton: args.priceTon.toString(),
-    token_price_usd: (Number(args.priceTon) / 1e9 * TON_USD_PRICE).toString(),
-    market_cap_ton_after: args.marketCapTon.toString(),
-    price_ton_after: args.priceTon.toString(),
-    block_time: args.at,
-    tx_lt: args.txLt,
-    tx_hash: args.txHash,
-  });
-
-  if (trade) {
-    await upsertCandles({
-      tokenAddress: args.tokenAddress,
-      type: args.type,
-      tonAmount: args.tonAmount,
-      marketCapTon: args.marketCapTon,
-      priceTon: args.priceTon,
-      at: args.at,
-    });
-    await refreshTradeCount(args.tokenAddress);
-  }
-  return trade;
-}
-
-async function recordStonfiPoolMove(args: {
+async function recordDexPoolMove(args: {
   poolAddress: string;
   tokenAddress: string;
   type: 'buy' | 'sell';
@@ -709,13 +571,13 @@ async function recordStonfiPoolMove(args: {
   at: string;
   sequence: string;
 }) {
-  const txHash = `stonfi:${args.poolAddress}:${args.sequence}`;
+  const txHash = `dedust:${args.poolAddress}:${args.sequence}`;
   const trade = await upsertTrade({
     token_address: args.tokenAddress,
     trader_address: args.poolAddress,
     user_address: args.poolAddress,
     type: args.type,
-    source: 'stonfi',
+    source: 'dedust',
     ton_amount: args.tonAmount.toString(),
     token_amount: args.tokenAmount.toString(),
     fee_ton: '0',
@@ -805,16 +667,15 @@ async function upsertCandles(args: {
   }
 }
 
-async function deriveStonPool(tokenAddress: string, jettonAddress: string): Promise<string | null> {
-  if (!STONFI_ROUTER || !STONFI_PTON_PROXY) return null;
+async function deriveDedustPool(tokenAddress: string, jettonAddress: string): Promise<string | null> {
+  if (!DEDUST_FACTORY) return null;
   try {
-    const router = new DEX.v2_1.Router.CPI(STONFI_ROUTER);
-    const poolAddress = await router.getPoolAddressByJettonMinters(client as any, {
-      token0: Address.parse(jettonAddress),
-      token1: STONFI_PTON_PROXY,
-    });
+    const factory = client.open(Factory.createFromAddress(DEDUST_FACTORY));
+    const jetton = Address.parse(jettonAddress);
+    const assets: [Asset, Asset] = [Asset.native(), Asset.jetton(jetton)];
+    const poolAddress = await factory.getPoolAddress({ poolType: PoolType.VOLATILE, assets });
     const pool = poolAddress.toString();
-    stonPools.set(pool, {
+    dexPools.set(pool, {
       tokenAddress,
       jettonAddress,
       lastReserve0: 0n,
@@ -823,7 +684,7 @@ async function deriveStonPool(tokenAddress: string, jettonAddress: string): Prom
     });
     return pool;
   } catch (error) {
-    console.error('STON.fi pool derive error:', error instanceof Error ? error.message : error);
+    console.error('DeDust pool derive error:', error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -853,7 +714,7 @@ async function updateReserves(bcAddress: string): Promise<ReserveSnapshot | null
     const row = await getTokenRow(bcAddress);
     const jettonAddress = row?.jetton_address || row?.master_address || '';
     const stonPoolAddress = migrated && jettonAddress && !row?.ston_pool_address
-      ? await deriveStonPool(bcAddress, jettonAddress)
+      ? await deriveDedustPool(bcAddress, jettonAddress)
       : row?.ston_pool_address || null;
 
     await updateToken(bcAddress, {
@@ -1152,88 +1013,23 @@ async function pollBondingCurves() {
   }
 }
 
-async function pollStonfiPoolTransactions(poolAddress: string, state: StonPoolState, data: StonPoolData): Promise<boolean> {
-  const market = poolMarketData(state, data);
-  let recorded = false;
-  const txs = await retry('getTransactions(stonfi pool)', () =>
-    client.getTransactions(Address.parse(poolAddress), { limit: 20, archival: false }),
-  );
-
-  for (const tx of txs.reverse()) {
-    const txHash = tx.hash().toString('hex');
-    const uniqueKey = `stonfi-pool:${poolAddress}:${txHash}`;
-    if (seenTxs.has(uniqueKey)) continue;
-    seenTxs.add(uniqueKey);
-
-    const inMsg = tx.inMessage;
-    if (!inMsg?.body) continue;
-
-    const swap = parsePoolSwapBody(inMsg.body);
-    if (!swap) continue;
-
-    const payTo = findPayTo(tx);
-    if (!payTo) continue;
-
-    const tokenIn = state.tokenReserveIndex === 1 ? swap.amount1In : swap.amount0In;
-    const tonIn = state.tokenReserveIndex === 1 ? swap.amount0In : swap.amount1In;
-    const tokenOut = state.tokenReserveIndex === 1 ? payTo.amount1Out : payTo.amount0Out;
-    const tonOut = state.tokenReserveIndex === 1 ? payTo.amount0Out : payTo.amount1Out;
-    const at = txTime(tx);
-
-    if (tonIn > 0n && tokenOut > 0n) {
-      const trade = await recordExactStonfiSwap({
-        tokenAddress: state.tokenAddress,
-        poolAddress,
-        txHash,
-        txLt: tx.lt.toString(),
-        at,
-        type: 'buy',
-        trader: swap.fromUser,
-        tokenAmount: tokenOut,
-        tonAmount: tonIn,
-        marketCapTon: market.marketCapTon,
-        priceTon: market.priceTon,
-        feeTokenAmount: 0n,
-      });
-      recorded = recorded || Boolean(trade);
-    } else if (tokenIn > 0n && tonOut > 0n) {
-      const grossTokenAmount = grossFromSellTaxNet(tokenIn);
-      const feeTokenAmount = grossTokenAmount > tokenIn ? grossTokenAmount - tokenIn : 0n;
-      const trade = await recordExactStonfiSwap({
-        tokenAddress: state.tokenAddress,
-        poolAddress,
-        txHash,
-        txLt: tx.lt.toString(),
-        at,
-        type: 'sell',
-        trader: swap.fromUser,
-        tokenAmount: grossTokenAmount || tokenIn,
-        tonAmount: tonOut,
-        marketCapTon: market.marketCapTon,
-        priceTon: market.priceTon,
-        feeTokenAmount,
-      });
-      recorded = recorded || Boolean(trade);
-    }
-  }
-
-  return recorded;
-}
-
-async function pollStonfiPools() {
-  const poolEntries = Array.from(stonPools.entries());
+async function pollDedustPools() {
+  const poolEntries = Array.from(dexPools.entries());
   const selected = selectBatch(poolEntries, poolCursor, POOLS_PER_TICK);
   poolCursor = selected.nextCursor;
 
   for (const [poolAddress, state] of selected.batch) {
     try {
-      const pool = new DEX.v2_1.Pool.CPI(poolAddress);
-      const data = await pool.getPoolData(client as any);
-      await ensureStonPoolState(poolAddress, state, data);
+      const pool = client.open(Pool.createFromAddress(Address.parse(poolAddress)));
+      const [reserves, assets] = await Promise.all([
+        pool.getReserves(),
+        pool.getAssets(),
+      ]);
+      const data: DexPoolData = { reserve0: reserves[0], reserve1: reserves[1], assets };
+      await ensureDexPoolState(poolAddress, state, data);
       const reserve0 = data.reserve0;
       const reserve1 = data.reserve1;
       if (reserve0 <= 0n || reserve1 <= 0n) continue;
-      const exactTradeRecorded = await pollStonfiPoolTransactions(poolAddress, state, data);
       if (reserve0 === state.lastReserve0 && reserve1 === state.lastReserve1) continue;
       const previousReserve0 = state.lastReserve0;
       const previousReserve1 = state.lastReserve1;
@@ -1261,10 +1057,10 @@ async function pollStonfiPools() {
         lp_status: 'locked',
       });
 
-      if (!exactTradeRecorded && previousReserve0 !== 0n && previousReserve1 !== 0n && tokenDelta > 0n && tonDelta > 0n) {
+      if (previousReserve0 !== 0n && previousReserve1 !== 0n && tokenDelta > 0n && tonDelta > 0n) {
         const at = new Date().toISOString();
         const sequence = `${Date.now()}:${reserve0}:${reserve1}`;
-        await recordStonfiPoolMove({
+        await recordDexPoolMove({
           poolAddress,
           tokenAddress: state.tokenAddress,
           type: tradeType,
@@ -1285,7 +1081,7 @@ async function pollStonfiPools() {
         });
       }
     } catch (error) {
-      console.error(`STON.fi pool poll error (${poolAddress.slice(0, 12)}...):`, error instanceof Error ? error.message : error);
+      console.error(`DeDust pool poll error (${poolAddress.slice(0, 12)}...):`, error instanceof Error ? error.message : error);
     }
   }
 }
@@ -1312,10 +1108,10 @@ async function bootstrap() {
     const pool = token.ston_pool_address;
     const jetton = token.jetton_address || token.master_address || '';
     if (pool && jetton) {
-      stonPools.set(pool, { tokenAddress: token.address, jettonAddress: jetton, lastReserve0: 0n, lastReserve1: 0n, tokenReserveIndex: null });
+      dexPools.set(pool, { tokenAddress: token.address, jettonAddress: jetton, lastReserve0: 0n, lastReserve1: 0n, tokenReserveIndex: null });
     }
   }
-  console.log(`Watching ${bondingCurves.size} active curves and ${stonPools.size} STON.fi pools`);
+  console.log(`Watching ${bondingCurves.size} active curves and ${dexPools.size} DeDust pools`);
 }
 
 async function main() {
@@ -1331,7 +1127,7 @@ async function main() {
   startTonapiWebhookReceiver();
   startPoller('factory', FACTORY_POLL_INTERVAL_MS, pollFactory);
   startPoller('curves', CURVE_POLL_INTERVAL_MS, pollBondingCurves);
-  startPoller('stonfi-pools', POOL_POLL_INTERVAL_MS, pollStonfiPools);
+  startPoller('dedust-pools', POOL_POLL_INTERVAL_MS, pollDedustPools);
 }
 
 main().catch(console.error);

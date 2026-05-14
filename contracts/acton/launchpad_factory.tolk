@@ -3,10 +3,8 @@ tolk 1.4
 import "@contracts/acton/constants"
 import "@contracts/acton/messages"
 
-struct FactoryStonfiConfig {
-    router: address
-    ptonWallet: address
-    lpReceiver: address
+struct FactoryDedustConfig {
+    nativeVault: address
 }
 
 struct FactoryCodeConfig {
@@ -20,7 +18,7 @@ struct FactoryStorage {
     platformWallet: address
     tokenCount: uint32
     migrationMarketCapTon: coins
-    stonfiConfig: Cell<FactoryStonfiConfig>
+    dedustConfig: Cell<FactoryDedustConfig>
     codeConfig: Cell<FactoryCodeConfig>
 }
 
@@ -52,7 +50,8 @@ struct BondingStorageData {
     createdAt: uint32
     migrationMarketCapTon: coins
     identityConfig: Cell<BondingIdentityConfigData>
-    stonfiConfig: Cell<BondingStonfiConfigData>
+    ownerConfig: Cell<BondingOwnerConfigData>
+    dedustConfig: Cell<BondingDedustConfigData>
     codeConfig: Cell<BondingCodeConfigData>
 }
 
@@ -62,19 +61,14 @@ struct BondingIdentityConfigData {
     platformWallet: address
 }
 
-struct BondingStonfiConfigData {
-    routerConfig: Cell<BondingStonfiRouterConfigData>
-    receiverConfig: Cell<BondingStonfiReceiverConfigData>
+struct BondingOwnerConfigData {
+    owner: address
 }
 
-struct BondingStonfiRouterConfigData {
-    router: address
-    ptonWallet: address
-}
-
-struct BondingStonfiReceiverConfigData {
-    routerTokenWallet: address
-    lpReceiver: address
+struct BondingDedustConfigData {
+    nativeVault: address
+    jettonVault: address
+    pool: address
 }
 
 struct BondingCodeConfigData {
@@ -148,16 +142,8 @@ fun curveState(
     creator: address,
     createdAt: int,
 ): ContractState {
-    val stonfiConfig = storage.stonfiConfig.load();
     val codeConfig = storage.codeConfig.load();
-    val routerTokenWallet = stonfiConfig.router == DEAD_ADDRESS
-        ? DEAD_ADDRESS
-        : factoryWalletAddress(
-            stonfiConfig.router,
-            jettonMaster,
-            storage.platformWallet,
-            codeConfig.jettonWalletCode,
-        );
+    val dedustConfig = storage.dedustConfig.load();
 
     return ContractState {
         code: codeConfig.bondingCurveCode,
@@ -175,15 +161,11 @@ fun curveState(
                 creator,
                 platformWallet: storage.platformWallet,
             }.toCell(),
-            stonfiConfig: BondingStonfiConfigData {
-                routerConfig: BondingStonfiRouterConfigData {
-                    router: stonfiConfig.router,
-                    ptonWallet: stonfiConfig.ptonWallet,
-                }.toCell(),
-                receiverConfig: BondingStonfiReceiverConfigData {
-                    routerTokenWallet,
-                    lpReceiver: stonfiConfig.lpReceiver,
-                }.toCell(),
+            ownerConfig: BondingOwnerConfigData { owner: storage.owner }.toCell(),
+            dedustConfig: BondingDedustConfigData {
+                nativeVault: dedustConfig.nativeVault,
+                jettonVault: DEAD_ADDRESS,
+                pool: DEAD_ADDRESS,
             }.toCell(),
             codeConfig: BondingCodeConfigData { walletCode: codeConfig.jettonWalletCode }.toCell(),
         }.toCell(),
@@ -192,7 +174,7 @@ fun curveState(
 
 type FactoryAllowedMessage =
     | DeployToken
-    | UpdateFactoryStonfiConfig
+    | UpdateFactoryDedustConfig
     | UpdateFactoryMigrationMarketCap
 
 contract LaunchpadFactory {
@@ -287,16 +269,11 @@ fun onInternalMessage(in: InMessage) {
             }).send(SEND_MODE_REGULAR);
         }
 
-        UpdateFactoryStonfiConfig => {
+        UpdateFactoryDedustConfig => {
             var storage = FactoryStorage.load();
             assert (in.senderAddress == storage.owner) throw 702;
-            val config = msg.config.load();
-            val routerConfig = config.routerConfig.load();
-            val receiverConfig = config.receiverConfig.load();
-            storage.stonfiConfig = FactoryStonfiConfig {
-                router: routerConfig.router,
-                ptonWallet: routerConfig.ptonWallet,
-                lpReceiver: receiverConfig.lpReceiver,
+            storage.dedustConfig = FactoryDedustConfig {
+                nativeVault: msg.nativeVault,
             }.toCell();
             storage.save();
         }

@@ -96,31 +96,24 @@ struct (0b00000000000000010000000000000010) SellTokens {
     minTonOut: coins
 }
 
-struct (0b00000000000000010000000000000011) MigrateToStonfi {
+struct (0b00000000000000010000000000000011) MigrateToDedust {
     queryId: uint64
 }
 
-struct StonfiRouterConfig {
-    router: address
-    ptonWallet: address
+struct DedustMigrationConfig {
+    nativeVault: address
+    jettonVault: address
+    pool: address
 }
 
-struct StonfiReceiverConfig {
-    routerTokenWallet: address
-    lpReceiver: address
-}
-
-struct StonfiMigrationConfig {
-    routerConfig: Cell<StonfiRouterConfig>
-    receiverConfig: Cell<StonfiReceiverConfig>
-}
-
-struct (0b00000000000000010000000000000101) ConfigureStonfiMigration {
+struct (0b00000000000000010000000000000101) ConfigureDedustMigration {
     queryId: uint64
-    config: Cell<StonfiMigrationConfig>
+    nativeVault: address
+    jettonVault: address
+    pool: address
 }
 
-struct (0b00000000000000010000000000000110) RetryStonfiMigration {
+struct (0b00000000000000010000000000000110) RetryDedustMigration {
     queryId: uint64
 }
 
@@ -137,35 +130,12 @@ struct (0b00000000000000100000000000000010) TokenDeployed {
     creator: address
 }
 
-struct (0b00000000000000100000000000000011) UpdateFactoryStonfiConfig {
+struct (0b00000000000000100000000000000011) UpdateFactoryDedustConfig {
     queryId: uint64
-    config: Cell<StonfiMigrationConfig>
+    nativeVault: address
 }
 
 struct (0b00000000000000100000000000000100) UpdateFactoryMigrationMarketCap {
     queryId: uint64
     migrationMarketCapTon: coins
-}
-
-struct StonfiProvideLiquidityData {
-    minLpOut: coins
-    receiverAddress: address
-    bothPositive: uint1
-    fwdGas: coins
-    customPayload: cell?
-}
-
-struct (0b00110111110000001001011011011111) StonfiProvideLiquidity {
-    routerWalletAddress: address
-    refundAddress: address
-    excessesAddress: address
-    deadline: uint64
-    additionalData: Cell<StonfiProvideLiquidityData>
-}
-
-struct (0b00000001111100111000001101011101) PtonTonTransfer {
-    queryId: uint64
-    tonAmount: coins
-    refundAddress: address
-    forwardPayload: Cell<StonfiProvideLiquidity>?
 }

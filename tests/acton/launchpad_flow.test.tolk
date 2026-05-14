@@ -24,7 +24,9 @@ struct FlowSetup {
     owner: Treasury
     alice: Treasury
     platform: Treasury
-    router: Treasury
+    nativeVault: Treasury
+    jettonVault: Treasury
+    pool: Treasury
 }
 
 fun testContent(): cell {
@@ -35,16 +37,14 @@ fun factoryStorage(
     owner: address,
     platformWallet: address,
     migrationMarketCapTon: coins,
-    router: address,
-    ptonWallet: address,
-    lpReceiver: address,
+    nativeVault: address,
 ): FactoryStorage {
     return FactoryStorage {
         owner,
         platformWallet,
         tokenCount: 0,
         migrationMarketCapTon,
-        stonfiConfig: FactoryStonfiConfig { router, ptonWallet, lpReceiver }.toCell(),
+        dedustConfig: FactoryDedustConfig { nativeVault }.toCell(),
         codeConfig: FactoryCodeConfig {
             bondingCurveCode: build("BondingCurve"),
             jettonMasterCode: build("FeeJettonMaster"),
@@ -57,18 +57,14 @@ fun deployFactory(
     owner: Treasury,
     platform: Treasury,
     migrationMarketCapTon: coins,
-    router: Treasury,
-    pton: Treasury,
-    lp: Treasury,
+    nativeVault: Treasury,
 ): LaunchpadFactory {
     val factory = LaunchpadFactory.fromStorage(
         factoryStorage(
             owner.address,
             platform.address,
             migrationMarketCapTon,
-            router.address,
-            pton.address,
-            lp.address,
+            nativeVault.address,
         ),
     );
     val deployRes = factory.deploy(owner.address, { value: ton("0.5") });
@@ -114,21 +110,28 @@ fun setupFlowWithMigrationCap(migrationMarketCapTon: coins): FlowSetup {
     val owner = testing.treasury("owner");
     val alice = testing.treasury("alice");
     val platform = testing.treasury("platform");
-    val router = testing.treasury("router");
-    val pton = testing.treasury("pton");
-    val lp = testing.treasury("lp-lock");
+    val nativeVault = testing.treasury("dedust-native-vault");
+    val jettonVault = testing.treasury("dedust-jetton-vault");
+    val pool = testing.treasury("dedust-pool");
 
     val factory = deployFactory(
         owner,
         platform,
         migrationMarketCapTon,
-        router,
-        pton,
-        lp,
+        nativeVault,
     );
     val (curve, master) = launchToken(factory, owner, 100, migrationMarketCapTon, 1);
+    val configureRes = curve.sendConfigureDedustMigration(
+        owner.address,
+        101,
+        nativeVault.address,
+        jettonVault.address,
+        pool.address,
+        { value: ton("0.05"), bounce: true },
+    );
+    expect(configureRes).toHaveAllSuccessfulTxs();
 
-    return FlowSetup { factory, curve, master, owner, alice, platform, router };
+    return FlowSetup { factory, curve, master, owner, alice, platform, nativeVault, jettonVault, pool };
 }
 
 fun wallet(master: FeeJettonMaster, owner: address): FeeJettonWallet {
@@ -159,24 +162,20 @@ fun sellPayload(queryId: uint64): RemainingBitsAndRefs {
     return sellPayloadWithMin(queryId, 0);
 }
 
-fun stonfiSwapPayload(): RemainingBitsAndRefs {
-    return inlineForwardPayload(beginCell().storeUint(OP_STONFI_SWAP, 32).endCell().beginParse());
+fun dedustSwapPayload(): RemainingBitsAndRefs {
+    return inlineForwardPayload(beginCell().storeUint(OP_DEDUST_JETTON_SWAP, 32).endCell().beginParse());
 }
 
 get fun `test factory launches low cap token`() {
     val owner = testing.treasury("factory-owner");
     val platform = testing.treasury("factory-platform");
-    val router = testing.treasury("factory-router");
-    val pton = testing.treasury("factory-pton");
-    val lp = testing.treasury("factory-lp");
+    val nativeVault = testing.treasury("factory-dedust-native-vault");
 
     val factory = deployFactory(
         owner,
         platform,
         LOW_TEST_MIGRATION_CAP,
-        router,
-        pton,
-        lp,
+        nativeVault,
     );
     val (curve, master) = launchToken(factory, owner, 1, LOW_TEST_MIGRATION_CAP, 1);
 
@@ -187,17 +186,13 @@ get fun `test factory launches low cap token`() {
 get fun `test duplicate metadata launches unique jetton masters`() {
     val owner = testing.treasury("duplicate-owner");
     val platform = testing.treasury("duplicate-platform");
-    val router = testing.treasury("duplicate-router");
-    val pton = testing.treasury("duplicate-pton");
-    val lp = testing.treasury("duplicate-lp");
+    val nativeVault = testing.treasury("duplicate-dedust-native-vault");
 
     val factory = deployFactory(
         owner,
         platform,
         LOW_TEST_MIGRATION_CAP,
-        router,
-        pton,
-        lp,
+        nativeVault,
     );
     val (curveA, masterA) = launchToken(factory, owner, 11, LOW_TEST_MIGRATION_CAP, 1);
     val (curveB, masterB) = launchToken(factory, owner, 12, LOW_TEST_MIGRATION_CAP, 2);
@@ -336,10 +331,10 @@ get fun `test low cap buy migrates and closes minting`() {
     val data = setup.master.getJettonData();
     expect(data.totalSupply).toEqual(TOTAL_SUPPLY);
     expect(data.mintable).toEqual(false);
-    expect(walletBalance(setup.master, setup.router.address) > 0).toBeTrue();
+    expect(walletBalance(setup.master, setup.jettonVault.address) > 0).toBeTrue();
 }
 
-get fun `test stonfi swap payload is taxed after migration`() {
+get fun `test dedust swap payload is taxed after migration`() {
     val setup = setupFlow();
 
     val migrateRes = setup
@@ -363,11 +358,11 @@ get fun `test stonfi swap payload is taxed after migration`() {
         setup.alice.address,
         401,
         swapAmount,
-        setup.router.address,
+        setup.jettonVault.address,
         setup.alice.address,
         null,
         ton("0.05"),
-        stonfiSwapPayload(),
+        dedustSwapPayload(),
         { value: ton("0.3"), bounce: true },
     );
     expect(swapRes).toHaveAllSuccessfulTxs();
