@@ -1,12 +1,14 @@
 import { Address, SendMode, Cell, beginCell, toNano } from '@ton/core';
 import { TonClient, WalletContractV5R1, internal } from '@ton/ton';
 import { mnemonicToWalletKey } from '@ton/crypto';
-import { DEX } from '@ston-fi/sdk';
+import { Asset, Factory, PoolType } from '@dedust/sdk';
 import * as dotenv from 'dotenv';
 import { jettonTransferBody } from '../wrappers/acton/LaunchpadActon';
 
 dotenv.config();
 
+const DEFAULT_DEDUST_FACTORY_ADDRESS = 'EQBfBWT7X2BHg9tXAxzhz2aKiNTU1tpt5NsiK0uSDW_YAJ67';
+const OP_DEDUST_JETTON_SWAP = 0xe3a0d482;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function hasFlag(flag: string): boolean {
@@ -87,6 +89,24 @@ async function jettonBalance(client: TonClient, wallet: Address): Promise<bigint
   return result.stack.readBigNumber();
 }
 
+function dedustJettonSwapPayload(args: { pool: Address; minOut: bigint; recipient: Address }): Cell {
+  return beginCell()
+    .storeUint(OP_DEDUST_JETTON_SWAP, 32)
+    .storeAddress(args.pool)
+    .storeUint(0, 1)
+    .storeCoins(args.minOut)
+    .storeMaybeRef(null)
+    .storeRef(
+      beginCell()
+        .storeUint(0, 32)
+        .storeAddress(args.recipient)
+        .storeMaybeRef(null)
+        .storeMaybeRef(null)
+        .endCell(),
+    )
+    .endCell();
+}
+
 async function main() {
   const execute = hasFlag('--execute') && !hasFlag('--dry-run');
   const jettonMasterRaw = argValue('--jetton-master') || process.env.SWEEP_JETTON_MASTER;
@@ -94,11 +114,10 @@ async function main() {
     throw new Error('Pass --jetton-master=<address> or set SWEEP_JETTON_MASTER');
   }
 
-  const routerRaw = process.env.STONFI_ROUTER_ADDRESS;
-  const ptonWalletRaw = process.env.STONFI_PTON_WALLET_ADDRESS;
+  const dedustFactoryRaw = process.env.DEDUST_FACTORY_ADDRESS || process.env.NEXT_PUBLIC_DEDUST_FACTORY_ADDRESS || DEFAULT_DEDUST_FACTORY_ADDRESS;
   const mnemonicRaw = process.env.TESTNET_PLATFORM_WALLET_MNEMONIC || process.env.PLATFORM_WALLET_MNEMONIC;
-  if (!routerRaw || !ptonWalletRaw || !mnemonicRaw || !process.env.TONCENTER_API_KEY) {
-    throw new Error('Set STONFI_ROUTER_ADDRESS, STONFI_PTON_WALLET_ADDRESS, TESTNET_PLATFORM_WALLET_MNEMONIC, and TONCENTER_API_KEY');
+  if (!dedustFactoryRaw || !mnemonicRaw || !process.env.TONCENTER_API_KEY) {
+    throw new Error('Set DEDUST_FACTORY_ADDRESS, TESTNET_PLATFORM_WALLET_MNEMONIC, and TONCENTER_API_KEY');
   }
 
   const endpoint = process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC';
@@ -117,8 +136,12 @@ async function main() {
   }
 
   const jettonMaster = Address.parse(jettonMasterRaw);
-  const router = Address.parse(routerRaw);
-  const ptonWallet = Address.parse(ptonWalletRaw);
+  const dedustFactory = client.open(Factory.createFromAddress(Address.parse(dedustFactoryRaw)));
+  const assets: [Asset, Asset] = [Asset.native(), Asset.jetton(jettonMaster)];
+  const [jettonVault, pool] = await Promise.all([
+    retry('get DeDust jetton vault', () => dedustFactory.getVaultAddress(Asset.jetton(jettonMaster))),
+    retry('get DeDust pool', () => dedustFactory.getPoolAddress({ poolType: PoolType.VOLATILE, assets })),
+  ]);
   const platformJettonWallet = await getWalletAddress(client, jettonMaster, wallet.address);
   const tokenBalance = await jettonBalance(client, platformJettonWallet);
   const tonBefore = await retry('getBalance(platform)', () => client.getBalance(wallet.address));
@@ -131,6 +154,8 @@ async function main() {
   console.log(`Mode: ${execute ? 'EXECUTE' : 'DRY RUN'}`);
   console.log(`Platform wallet: ${wallet.address.toString({ testOnly: true })}`);
   console.log(`Fee token wallet: ${platformJettonWallet.toString({ testOnly: true })}`);
+  console.log(`DeDust jetton vault: ${jettonVault.toString({ testOnly: true })}`);
+  console.log(`DeDust pool: ${pool.toString({ testOnly: true })}`);
   console.log(`Fee token balance: ${Number(tokenBalance) / 1e9}`);
   console.log(`Sweep amount: ${Number(amount) / 1e9}`);
   console.log(`Platform TON balance before: ${Number(tonBefore) / 1e9}`);
@@ -147,15 +172,10 @@ async function main() {
     throw new Error('Platform wallet needs more TON for sweep gas');
   }
 
-  const routerContract = new DEX.v2_1.Router.CPI(router);
-  const swapPayload = await routerContract.createSwapBody({
-    askJettonWalletAddress: ptonWallet,
-    refundAddress: wallet.address,
-    excessesAddress: wallet.address,
-    receiverAddress: wallet.address,
-    minAskAmount: BigInt(argValue('--min-ton-out-nano') || '0'),
-    referralValue: 0,
-    deadline: Math.floor(Date.now() / 1000) + 900,
+  const swapPayload = dedustJettonSwapPayload({
+    pool,
+    minOut: BigInt(argValue('--min-ton-out-nano') || '0'),
+    recipient: wallet.address,
   });
 
   await sendOne({
@@ -166,7 +186,7 @@ async function main() {
     body: jettonTransferBody({
       queryId: BigInt(Date.now()),
       amount,
-      destination: router,
+      destination: jettonVault,
       responseDestination: wallet.address,
       forwardTonAmount,
       forwardPayload: swapPayload,
