@@ -31,6 +31,26 @@ services:
         sync: false
       - key: DEDUST_FACTORY_ADDRESS
         value: EQBfBWT7X2BHg9tXAxzhz2aKiNTU1tpt5NsiK0uSDW_YAJ67
+      - key: TESTNET_PLATFORM_WALLET
+        sync: false
+      - key: TESTNET_PLATFORM_WALLET_MNEMONIC
+        sync: false
+      - key: AUTO_SWEEP_FEES_ENABLED
+        value: "true"
+      - key: AUTO_SWEEP_MIN_FEE_TOKENS
+        value: "1000"
+      - key: AUTO_SWEEP_TX_VALUE_TON
+        value: "0.4"
+      - key: AUTO_SWEEP_FORWARD_TON
+        value: "0.25"
+      - key: AUTO_SWEEP_MAX_SPEND_TON
+        value: "0.5"
+      - key: AUTO_SWEEP_MIN_PLATFORM_TON
+        value: "0.5"
+      - key: AUTO_SWEEP_COOLDOWN_MS
+        value: "120000"
+      - key: AUTO_SWEEP_SCAN_INTERVAL_MS
+        value: "180000"
       - key: TONCENTER_API_KEY
         sync: false
       - key: TONAPI_KEY

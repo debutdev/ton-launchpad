@@ -2,10 +2,12 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
-import { Address, beginCell, Cell, Slice } from '@ton/core';
-import { TonClient } from '@ton/ton';
+import { Address, beginCell, Cell, SendMode, Slice, toNano } from '@ton/core';
+import { TonClient, WalletContractV5R1, internal } from '@ton/ton';
+import { mnemonicToWalletKey } from '@ton/crypto';
 import { Asset, Factory, Pool, PoolType } from '@dedust/sdk';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { jettonTransferBody } from '../wrappers/acton/LaunchpadActon';
 import {
   INITIAL_VIRTUAL_TOKENS,
   INITIAL_VIRTUAL_TON,
@@ -46,6 +48,17 @@ const INDEXER_LOCK_PATH = process.env.INDEXER_LOCK_PATH || path.join(process.cwd
 const TONAPI_WEBHOOK_PORT = Number(process.env.PORT || process.env.TONAPI_WEBHOOK_PORT || 8790);
 const TONAPI_WEBHOOK_SECRET = process.env.TONAPI_WEBHOOK_SECRET || '';
 const TONAPI_WEBHOOK_ENABLED = process.env.TONAPI_WEBHOOK_ENABLED !== 'false';
+const AUTO_SWEEP_FEES_ENABLED = process.env.AUTO_SWEEP_FEES_ENABLED === 'true';
+const AUTO_SWEEP_MIN_FEE_TOKENS = parseTokenUnits(process.env.AUTO_SWEEP_MIN_FEE_TOKENS || '1000');
+const AUTO_SWEEP_TX_VALUE = toNano(process.env.AUTO_SWEEP_TX_VALUE_TON || '0.4');
+const AUTO_SWEEP_FORWARD_TON = toNano(process.env.AUTO_SWEEP_FORWARD_TON || '0.25');
+const AUTO_SWEEP_MAX_SPEND = toNano(process.env.AUTO_SWEEP_MAX_SPEND_TON || '0.5');
+const AUTO_SWEEP_MIN_PLATFORM_TON = toNano(process.env.AUTO_SWEEP_MIN_PLATFORM_TON || '0.5');
+const AUTO_SWEEP_MIN_TON_OUT = BigInt(process.env.AUTO_SWEEP_MIN_TON_OUT_NANO || '0');
+const AUTO_SWEEP_COOLDOWN_MS = Math.max(30_000, Number(process.env.AUTO_SWEEP_COOLDOWN_MS || 120_000));
+const AUTO_SWEEP_SCAN_INTERVAL_MS = Math.max(60_000, Number(process.env.AUTO_SWEEP_SCAN_INTERVAL_MS || 180_000));
+const AUTO_SWEEP_WALLET_GLOBAL_ID = Number(process.env.AUTO_SWEEP_WALLET_GLOBAL_ID || '-239');
+const PLATFORM_WALLET_MNEMONIC = process.env.TESTNET_PLATFORM_WALLET_MNEMONIC || process.env.PLATFORM_WALLET_MNEMONIC || '';
 const TON_USD_PRICE = Number(TON_USD_PRICE_NUM) / Number(TON_USD_PRICE_DEN);
 
 const OP_TOKEN_DEPLOYED = 0x20002;
@@ -54,6 +67,7 @@ const OP_SELL_TOKENS = 0x10002;
 const OP_JETTON_NOTIFICATION = 0x7362d09c;
 const OP_MINT = 0x642b7d07;
 const OP_JETTON_TRANSFER_INTERNAL = 0x178d4519;
+const OP_DEDUST_JETTON_SWAP = 0xe3a0d482;
 const BUY_GAS_RESERVE = 100000000n;
 const MIGRATION_GAS_RESERVE = 1200000000n;
 const SELL_TAX_NUMERATOR = 2n;
@@ -120,8 +134,14 @@ const dexPools = new Map<string, DexPoolState>();
 const pollRunning = new Map<string, boolean>();
 const lastRetryLog = new Map<string, number>();
 const invalidCurveAddresses = new Set<string>();
+const autoSweepCooldown = new Map<string, number>();
+const autoSweepInFlight = new Set<string>();
+let autoSweepWallet: Promise<{ wallet: any; secretKey: Buffer | Uint8Array; address: Address } | null> | null = null;
+let autoSweepQueue = Promise.resolve();
+let autoSweepMissingConfigLogged = false;
 let curveCursor = 0;
 let poolCursor = 0;
+let sweepCursor = 0;
 
 function acquireIndexerLock() {
   fs.mkdirSync(path.dirname(INDEXER_LOCK_PATH), { recursive: true });
@@ -162,6 +182,15 @@ function parseNano(value: unknown): bigint {
   } catch {
     return 0n;
   }
+}
+
+function parseTokenUnits(value: string): bigint {
+  const trimmed = value.trim();
+  if (!trimmed) return 0n;
+  if (/^\d+$/.test(trimmed)) return BigInt(trimmed) * 1000000000n;
+  const [whole, fraction = ''] = trimmed.split('.');
+  const normalizedFraction = `${fraction.slice(0, 9)}000000000`.slice(0, 9);
+  return BigInt(whole || '0') * 1000000000n + BigInt(normalizedFraction);
 }
 
 function inferBuyAmount(attachedTon: bigint): bigint {
@@ -320,6 +349,189 @@ function startPoller(label: string, intervalMs: number, fn: () => Promise<void>)
 
   setInterval(() => void run(), intervalMs);
   void run();
+}
+
+async function getAutoSweepWallet(): Promise<{ wallet: any; secretKey: Buffer | Uint8Array; address: Address } | null> {
+  if (!AUTO_SWEEP_FEES_ENABLED || !PLATFORM_WALLET_MNEMONIC) return null;
+
+  if (!autoSweepWallet) {
+    autoSweepWallet = (async () => {
+      const key = await mnemonicToWalletKey(PLATFORM_WALLET_MNEMONIC.trim().split(/\s+/));
+      const wallet = WalletContractV5R1.create({
+        publicKey: key.publicKey,
+        walletId: { networkGlobalId: AUTO_SWEEP_WALLET_GLOBAL_ID },
+      });
+      if (PLATFORM_WALLET && !wallet.address.equals(PLATFORM_WALLET)) {
+        console.error('Auto sweep disabled: platform mnemonic does not match TESTNET_PLATFORM_WALLET/NEXT_PUBLIC_PLATFORM_WALLET');
+        return null;
+      }
+      return { wallet: client.open(wallet), secretKey: key.secretKey, address: wallet.address };
+    })();
+  }
+
+  return autoSweepWallet;
+}
+
+async function waitSeqno(wallet: { getSeqno(): Promise<number> }, seqno: number): Promise<void> {
+  while ((await retry('getSeqno(auto-sweep)', () => wallet.getSeqno())) === seqno) {
+    await sleep(3000);
+  }
+}
+
+async function sendAutoSweepMessage(args: {
+  wallet: any;
+  secretKey: Buffer | Uint8Array;
+  to: Address;
+  value: bigint;
+  body: Cell;
+}): Promise<void> {
+  const seqno = Number(await retry('getSeqno(auto-sweep)', () => args.wallet.getSeqno()));
+  await retry('sendTransfer(auto-sweep)', () =>
+    args.wallet.sendTransfer({
+      seqno,
+      secretKey: args.secretKey,
+      sendMode: SendMode.PAY_GAS_SEPARATELY,
+      messages: [
+        internal({
+          to: args.to,
+          value: args.value,
+          bounce: true,
+          body: args.body,
+        }),
+      ],
+    }),
+  );
+  await waitSeqno(args.wallet, seqno);
+}
+
+async function getJettonWalletAddress(jettonMaster: Address, owner: Address): Promise<Address> {
+  const result = await retry('get_wallet_address(auto-sweep)', () =>
+    client.runMethod(jettonMaster, 'get_wallet_address', [
+      { type: 'slice', cell: beginCell().storeAddress(owner).endCell() },
+    ]),
+  );
+  return result.stack.readAddress();
+}
+
+async function getJettonWalletBalance(wallet: Address): Promise<bigint> {
+  const state = await retry('getContractState(auto-sweep jetton wallet)', () => client.getContractState(wallet));
+  if (state.state !== 'active') return 0n;
+  const result = await retry('get_wallet_data(auto-sweep)', () => client.runMethod(wallet, 'get_wallet_data'));
+  return result.stack.readBigNumber();
+}
+
+function dedustJettonSwapPayload(args: { pool: Address; minOut: bigint; recipient: Address }): Cell {
+  return beginCell()
+    .storeUint(OP_DEDUST_JETTON_SWAP, 32)
+    .storeAddress(args.pool)
+    .storeUint(0, 1)
+    .storeCoins(args.minOut)
+    .storeMaybeRef(null)
+    .storeRef(
+      beginCell()
+        .storeUint(0, 32)
+        .storeAddress(args.recipient)
+        .storeMaybeRef(null)
+        .storeMaybeRef(null)
+        .endCell(),
+    )
+    .endCell();
+}
+
+function scheduleFeeAutoSweep(args: {
+  tokenAddress: string;
+  jettonAddress: string;
+  poolAddress: string;
+  reason: string;
+}) {
+  if (!AUTO_SWEEP_FEES_ENABLED) return;
+  if (!PLATFORM_WALLET_MNEMONIC) {
+    if (!autoSweepMissingConfigLogged) {
+      console.warn('Auto sweep enabled but platform wallet mnemonic is not configured; skipping fee sweep.');
+      autoSweepMissingConfigLogged = true;
+    }
+    return;
+  }
+
+  autoSweepQueue = autoSweepQueue
+    .then(() => sweepFeeTokensToTon(args))
+    .catch((error) => {
+      console.error('Auto fee sweep error:', error instanceof Error ? error.message : error);
+    });
+}
+
+async function sweepFeeTokensToTon(args: {
+  tokenAddress: string;
+  jettonAddress: string;
+  poolAddress: string;
+  reason: string;
+}) {
+  const now = Date.now();
+  const lastSweep = autoSweepCooldown.get(args.jettonAddress) || 0;
+  if (now - lastSweep < AUTO_SWEEP_COOLDOWN_MS || autoSweepInFlight.has(args.jettonAddress)) return;
+  autoSweepInFlight.add(args.jettonAddress);
+
+  try {
+    if (AUTO_SWEEP_TX_VALUE > AUTO_SWEEP_MAX_SPEND) {
+      console.error('Auto sweep disabled: AUTO_SWEEP_TX_VALUE_TON exceeds AUTO_SWEEP_MAX_SPEND_TON');
+      return;
+    }
+
+    const sweepWallet = await getAutoSweepWallet();
+    if (!sweepWallet || !DEDUST_FACTORY) return;
+
+    const jettonMaster = Address.parse(args.jettonAddress);
+    const platformJettonWallet = await getJettonWalletAddress(jettonMaster, sweepWallet.address);
+    const feeBalance = await getJettonWalletBalance(platformJettonWallet);
+    if (feeBalance < AUTO_SWEEP_MIN_FEE_TOKENS) return;
+
+    const tonBalance = await retry('getBalance(auto-sweep platform)', () => client.getBalance(sweepWallet.address));
+    if (tonBalance <= AUTO_SWEEP_TX_VALUE + AUTO_SWEEP_MIN_PLATFORM_TON) {
+      console.warn('Auto sweep skipped: platform wallet TON balance is below configured reserve.');
+      return;
+    }
+
+    const factory = client.open(Factory.createFromAddress(DEDUST_FACTORY));
+    const assets: [Asset, Asset] = [Asset.native(), Asset.jetton(jettonMaster)];
+    const [jettonVault, expectedPool] = await Promise.all([
+      retry('get DeDust jetton vault(auto-sweep)', () =>
+        factory.getVaultAddress(Asset.jetton(jettonMaster)),
+      ),
+      retry('get DeDust pool(auto-sweep)', () =>
+        factory.getPoolAddress({ poolType: PoolType.VOLATILE, assets }),
+      ),
+    ]);
+    const pool = Address.parse(args.poolAddress);
+    if (!pool.equals(expectedPool)) {
+      console.warn(`Auto sweep skipped: stored pool does not match DeDust pool for ${args.tokenAddress.slice(0, 12)}...`);
+      return;
+    }
+
+    await sendAutoSweepMessage({
+      wallet: sweepWallet.wallet,
+      secretKey: sweepWallet.secretKey,
+      to: platformJettonWallet,
+      value: AUTO_SWEEP_TX_VALUE,
+      body: jettonTransferBody({
+        queryId: BigInt(Date.now()),
+        amount: feeBalance,
+        destination: jettonVault,
+        responseDestination: sweepWallet.address,
+        forwardTonAmount: AUTO_SWEEP_FORWARD_TON,
+        forwardPayload: dedustJettonSwapPayload({
+          pool,
+          minOut: AUTO_SWEEP_MIN_TON_OUT,
+          recipient: sweepWallet.address,
+        }),
+        forwardPayloadByRef: true,
+      }),
+    });
+
+    autoSweepCooldown.set(args.jettonAddress, Date.now());
+    console.log(`Auto-swept ${Number(feeBalance) / 1e9} fee tokens to TON for ${args.tokenAddress.slice(0, 12)}... (${args.reason})`);
+  } finally {
+    autoSweepInFlight.delete(args.jettonAddress);
+  }
 }
 
 function markInvalidCurve(address: string, reason: string) {
@@ -1079,10 +1291,34 @@ async function pollDedustPools() {
           priceTon,
           at,
         });
+        if (tradeType === 'sell') {
+          scheduleFeeAutoSweep({
+            tokenAddress: state.tokenAddress,
+            jettonAddress: state.jettonAddress,
+            poolAddress,
+            reason: 'dedust-sell',
+          });
+        }
       }
     } catch (error) {
       console.error(`DeDust pool poll error (${poolAddress.slice(0, 12)}...):`, error instanceof Error ? error.message : error);
     }
+  }
+}
+
+async function pollFeeAutoSweeps() {
+  if (!AUTO_SWEEP_FEES_ENABLED) return;
+  const poolEntries = Array.from(dexPools.entries());
+  const selected = selectBatch(poolEntries, sweepCursor, Math.max(1, POOLS_PER_TICK));
+  sweepCursor = selected.nextCursor;
+
+  for (const [poolAddress, state] of selected.batch) {
+    scheduleFeeAutoSweep({
+      tokenAddress: state.tokenAddress,
+      jettonAddress: state.jettonAddress,
+      poolAddress,
+      reason: 'periodic-scan',
+    });
   }
 }
 
@@ -1121,6 +1357,7 @@ async function main() {
   console.log(`Factory polling: ${FACTORY_POLL_INTERVAL_MS}ms`);
   console.log(`Curve polling: ${CURVE_POLL_INTERVAL_MS}ms, ${CURVES_PER_TICK} curve(s) per tick`);
   console.log(`Pool polling: ${POOL_POLL_INTERVAL_MS}ms, ${POOLS_PER_TICK} pool(s) per tick`);
+  console.log(`Auto fee sweep: ${AUTO_SWEEP_FEES_ENABLED ? 'enabled' : 'disabled'}`);
   console.log(`Live webhook: ${LIVE_EVENTS_WEBHOOK_URL || 'disabled'}`);
 
   await bootstrap();
@@ -1128,6 +1365,7 @@ async function main() {
   startPoller('factory', FACTORY_POLL_INTERVAL_MS, pollFactory);
   startPoller('curves', CURVE_POLL_INTERVAL_MS, pollBondingCurves);
   startPoller('dedust-pools', POOL_POLL_INTERVAL_MS, pollDedustPools);
+  startPoller('fee-auto-sweep', AUTO_SWEEP_SCAN_INTERVAL_MS, pollFeeAutoSweeps);
 }
 
 main().catch(console.error);
