@@ -56,6 +56,10 @@ const AUTO_SWEEP_MAX_SPEND = toNano(process.env.AUTO_SWEEP_MAX_SPEND_TON || '0.5
 const AUTO_SWEEP_MIN_PLATFORM_TON = toNano(process.env.AUTO_SWEEP_MIN_PLATFORM_TON || '0.5');
 const AUTO_SWEEP_MIN_TON_OUT = BigInt(process.env.AUTO_SWEEP_MIN_TON_OUT_NANO || '0');
 const AUTO_SWEEP_COOLDOWN_MS = Math.max(30_000, Number(process.env.AUTO_SWEEP_COOLDOWN_MS || 120_000));
+const AUTO_SWEEP_BALANCE_RETRY_MS = Math.max(
+  AUTO_SWEEP_COOLDOWN_MS,
+  Number(process.env.AUTO_SWEEP_BALANCE_RETRY_MS || 3_600_000),
+);
 const AUTO_SWEEP_SCAN_INTERVAL_MS = Math.max(60_000, Number(process.env.AUTO_SWEEP_SCAN_INTERVAL_MS || 180_000));
 const AUTO_SWEEP_WALLET_GLOBAL_ID = Number(process.env.AUTO_SWEEP_WALLET_GLOBAL_ID || '-239');
 const PLATFORM_WALLET_MNEMONIC = process.env.TESTNET_PLATFORM_WALLET_MNEMONIC || process.env.PLATFORM_WALLET_MNEMONIC || '';
@@ -135,6 +139,7 @@ const pollRunning = new Map<string, boolean>();
 const lastRetryLog = new Map<string, number>();
 const invalidCurveAddresses = new Set<string>();
 const autoSweepCooldown = new Map<string, number>();
+const autoSweepLastAttempt = new Map<string, { amount: bigint; at: number }>();
 const autoSweepInFlight = new Set<string>();
 let autoSweepWallet: Promise<{ wallet: any; secretKey: Buffer | Uint8Array; address: Address } | null> | null = null;
 let autoSweepQueue = Promise.resolve();
@@ -485,6 +490,17 @@ async function sweepFeeTokensToTon(args: {
     const feeBalance = await getJettonWalletBalance(platformJettonWallet);
     if (feeBalance < AUTO_SWEEP_MIN_FEE_TOKENS) return;
 
+    const lastAttempt = autoSweepLastAttempt.get(args.jettonAddress);
+    if (
+      lastAttempt &&
+      lastAttempt.amount === feeBalance &&
+      now - lastAttempt.at < AUTO_SWEEP_BALANCE_RETRY_MS
+    ) {
+      return;
+    }
+    autoSweepLastAttempt.set(args.jettonAddress, { amount: feeBalance, at: now });
+    autoSweepCooldown.set(args.jettonAddress, now);
+
     const tonBalance = await retry('getBalance(auto-sweep platform)', () => client.getBalance(sweepWallet.address));
     if (tonBalance <= AUTO_SWEEP_TX_VALUE + AUTO_SWEEP_MIN_PLATFORM_TON) {
       console.warn('Auto sweep skipped: platform wallet TON balance is below configured reserve.');
@@ -527,7 +543,6 @@ async function sweepFeeTokensToTon(args: {
       }),
     });
 
-    autoSweepCooldown.set(args.jettonAddress, Date.now());
     console.log(`Auto-swept ${Number(feeBalance) / 1e9} fee tokens to TON for ${args.tokenAddress.slice(0, 12)}... (${args.reason})`);
   } finally {
     autoSweepInFlight.delete(args.jettonAddress);

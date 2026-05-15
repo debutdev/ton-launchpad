@@ -49,6 +49,8 @@ services:
         value: "0.5"
       - key: AUTO_SWEEP_COOLDOWN_MS
         value: "120000"
+      - key: AUTO_SWEEP_BALANCE_RETRY_MS
+        value: "3600000"
       - key: AUTO_SWEEP_SCAN_INTERVAL_MS
         value: "180000"
       - key: TONCENTER_API_KEY
