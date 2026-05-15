@@ -19,6 +19,16 @@ import {
   getPriceInNanotons,
 } from '../lib/bondingCurve';
 import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS } from './deployment_config';
+import {
+  OP_DEDUST_JETTON_SWAP,
+  OP_DEDUST_POOL_SWAP,
+  OP_JETTON_NOTIFICATION,
+  parseDedustJettonVaultSender,
+  parseDedustNativeSwapPool,
+  parseDedustPoolSwapBody,
+  parseForwardPayload,
+  readBodyOp,
+} from './dedust_attribution';
 
 dotenv.config();
 
@@ -68,10 +78,8 @@ const TON_USD_PRICE = Number(TON_USD_PRICE_NUM) / Number(TON_USD_PRICE_DEN);
 const OP_TOKEN_DEPLOYED = 0x20002;
 const OP_BUY_TOKENS = 0x10001;
 const OP_SELL_TOKENS = 0x10002;
-const OP_JETTON_NOTIFICATION = 0x7362d09c;
 const OP_MINT = 0x642b7d07;
 const OP_JETTON_TRANSFER_INTERNAL = 0x178d4519;
-const OP_DEDUST_JETTON_SWAP = 0xe3a0d482;
 const BUY_GAS_RESERVE = 100000000n;
 const MIGRATION_GAS_RESERVE = 1200000000n;
 const SELL_TAX_NUMERATOR = 2n;
@@ -107,7 +115,10 @@ type DexPoolState = {
   jettonAddress: string;
   lastReserve0: bigint;
   lastReserve1: bigint;
+  lastPoolLt?: bigint;
   tokenReserveIndex: 0 | 1 | null;
+  nativeVaultAddress?: string;
+  jettonVaultAddress?: string;
 };
 
 type DexPoolData = {
@@ -120,6 +131,14 @@ type TonapiWebhookBody = {
   account_id?: string;
   lt?: number | string;
   tx_hash?: string;
+};
+
+type DedustSwapAttribution = {
+  traderAddress: string;
+  txHash: string;
+  txLt: string;
+  blockTime: string;
+  amountIn: bigint;
 };
 
 const client = new TonClient({
@@ -220,26 +239,6 @@ function grossFromSellTaxNet(netAmount: bigint): bigint {
 function readMaybeRef(slice: Slice): Cell | null {
   if (slice.remainingBits === 0) return null;
   return slice.loadMaybeRef();
-}
-
-function parseForwardPayload(slice: Slice): Slice | null {
-  const payloadCell = beginCell().storeSlice(slice).endCell();
-
-  try {
-    const direct = payloadCell.beginParse();
-    if (direct.remainingBits >= 32 && direct.preloadUint(32) === OP_SELL_TOKENS) return direct;
-  } catch {
-    // Fall through to TEP-74 Either<Cell, ^Cell> parsing.
-  }
-
-  try {
-    const either = payloadCell.beginParse();
-    if (either.remainingBits < 1) return null;
-    const byRef = either.loadBit();
-    return byRef ? either.loadRef().beginParse() : either;
-  } catch {
-    return null;
-  }
 }
 
 function txTime(tx: { now?: number }): string {
@@ -787,6 +786,105 @@ function poolMarketData(state: DexPoolState, data: DexPoolData) {
   return { tokenReserve, tonReserve, marketCapTon, priceTon };
 }
 
+async function ensureDedustVaultState(state: DexPoolState): Promise<{ nativeVault: Address; jettonVault: Address } | null> {
+  if (!DEDUST_FACTORY) return null;
+  if (state.nativeVaultAddress && state.jettonVaultAddress) {
+    return {
+      nativeVault: Address.parse(state.nativeVaultAddress),
+      jettonVault: Address.parse(state.jettonVaultAddress),
+    };
+  }
+
+  const factory = client.open(Factory.createFromAddress(DEDUST_FACTORY));
+  const jetton = Address.parse(state.jettonAddress);
+  const [nativeVault, jettonVault] = await Promise.all([
+    retry('get DeDust native vault(attribution)', () => factory.getVaultAddress(Asset.native())),
+    retry('get DeDust jetton vault(attribution)', () => factory.getVaultAddress(Asset.jetton(jetton))),
+  ]);
+  state.nativeVaultAddress = nativeVault.toString();
+  state.jettonVaultAddress = jettonVault.toString();
+  return { nativeVault, jettonVault };
+}
+
+async function resolveDedustVaultSender(args: {
+  poolAddress: Address;
+  vaultAddress: Address;
+  tradeType: 'buy' | 'sell';
+  poolTxTime: number;
+}): Promise<Address | null> {
+  const txs = await retry('getTransactions(dedust vault attribution)', () =>
+    client.getTransactions(args.vaultAddress, { limit: 20, archival: false }),
+  );
+
+  for (const tx of txs) {
+    if (Math.abs(Number(tx.now || 0) - args.poolTxTime) > 300) continue;
+    const outToPool = Array.from(tx.outMessages.values()).some((message) => (
+      message.info.type === 'internal' &&
+      message.info.dest.equals(args.poolAddress) &&
+      readBodyOp(message.body) === OP_DEDUST_POOL_SWAP
+    ));
+    if (!outToPool) continue;
+
+    const inMsg = tx.inMessage;
+    if (!inMsg?.body || inMsg.info.type !== 'internal') continue;
+
+    if (args.tradeType === 'buy') {
+      const pool = parseDedustNativeSwapPool(inMsg.body);
+      if (pool?.equals(args.poolAddress)) return inMsg.info.src;
+    } else {
+      const sender = parseDedustJettonVaultSender(inMsg.body, args.poolAddress);
+      if (sender) return sender;
+    }
+  }
+
+  return null;
+}
+
+async function resolveDedustSwapAttribution(args: {
+  poolAddress: string;
+  state: DexPoolState;
+  tradeType: 'buy' | 'sell';
+}): Promise<DedustSwapAttribution | null> {
+  const vaults = await ensureDedustVaultState(args.state);
+  if (!vaults) return null;
+
+  const poolAddress = Address.parse(args.poolAddress);
+  const expectedVault = args.tradeType === 'buy' ? vaults.nativeVault : vaults.jettonVault;
+  const txs = await retry('getTransactions(dedust pool attribution)', () =>
+    client.getTransactions(poolAddress, { limit: 20, archival: false }),
+  );
+
+  for (const tx of txs) {
+    const txLt = BigInt(tx.lt.toString());
+    if (args.state.lastPoolLt && txLt <= args.state.lastPoolLt) continue;
+    const inMsg = tx.inMessage;
+    if (!inMsg?.body || inMsg.info.type !== 'internal') continue;
+    if (!inMsg.info.src.equals(expectedVault)) continue;
+
+    const parsed = parseDedustPoolSwapBody(inMsg.body);
+    if (!parsed) continue;
+
+    const vaultSender = await resolveDedustVaultSender({
+      poolAddress,
+      vaultAddress: expectedVault,
+      tradeType: args.tradeType,
+      poolTxTime: Number(tx.now || 0),
+    });
+    const trader = vaultSender || parsed.sender;
+    args.state.lastPoolLt = txLt;
+
+    return {
+      traderAddress: trader.toString(),
+      txHash: `dedust:${args.poolAddress}:${tx.hash().toString('hex')}`,
+      txLt: tx.lt.toString(),
+      blockTime: txTime(tx),
+      amountIn: parsed.amountIn,
+    };
+  }
+
+  return null;
+}
+
 async function recordDexPoolMove(args: {
   poolAddress: string;
   tokenAddress: string;
@@ -797,25 +895,30 @@ async function recordDexPoolMove(args: {
   priceTon: bigint;
   at: string;
   sequence: string;
+  traderAddress?: string;
+  txHash?: string;
+  txLt?: string;
 }) {
-  const txHash = `dedust:${args.poolAddress}:${args.sequence}`;
+  const txHash = args.txHash || `dedust:${args.poolAddress}:${args.sequence}`;
+  const traderAddress = args.traderAddress || args.poolAddress;
+  const feeTokenAmount = args.type === 'sell' ? grossFromSellTaxNet(args.tokenAmount) - args.tokenAmount : 0n;
   const trade = await upsertTrade({
     token_address: args.tokenAddress,
-    trader_address: args.poolAddress,
-    user_address: args.poolAddress,
+    trader_address: traderAddress,
+    user_address: traderAddress,
     type: args.type,
     source: 'dedust',
     ton_amount: args.tonAmount.toString(),
     token_amount: args.tokenAmount.toString(),
     fee_ton: '0',
-    fee_token_amount: args.type === 'sell' ? (args.tokenAmount * 2n / 100n).toString() : '0',
-    platform_revenue_token_amount: args.type === 'sell' ? (args.tokenAmount * 2n / 100n).toString() : '0',
+    fee_token_amount: feeTokenAmount.toString(),
+    platform_revenue_token_amount: feeTokenAmount.toString(),
     token_price_ton: args.priceTon.toString(),
     token_price_usd: (Number(args.priceTon) / 1e9 * TON_USD_PRICE).toString(),
     market_cap_ton_after: args.marketCapTon.toString(),
     price_ton_after: args.priceTon.toString(),
     block_time: args.at,
-    tx_lt: '0',
+    tx_lt: args.txLt || '0',
     tx_hash: txHash,
   });
 
@@ -900,7 +1003,11 @@ async function deriveDedustPool(tokenAddress: string, jettonAddress: string): Pr
     const factory = client.open(Factory.createFromAddress(DEDUST_FACTORY));
     const jetton = Address.parse(jettonAddress);
     const assets: [Asset, Asset] = [Asset.native(), Asset.jetton(jetton)];
-    const poolAddress = await factory.getPoolAddress({ poolType: PoolType.VOLATILE, assets });
+    const [poolAddress, nativeVault, jettonVault] = await Promise.all([
+      factory.getPoolAddress({ poolType: PoolType.VOLATILE, assets }),
+      factory.getVaultAddress(Asset.native()),
+      factory.getVaultAddress(Asset.jetton(jetton)),
+    ]);
     const pool = poolAddress.toString();
     dexPools.set(pool, {
       tokenAddress,
@@ -908,6 +1015,8 @@ async function deriveDedustPool(tokenAddress: string, jettonAddress: string): Pr
       lastReserve0: 0n,
       lastReserve1: 0n,
       tokenReserveIndex: null,
+      nativeVaultAddress: nativeVault.toString(),
+      jettonVaultAddress: jettonVault.toString(),
     });
     return pool;
   } catch (error) {
@@ -1186,7 +1295,7 @@ async function pollBondingCurves() {
             slice.loadUintBig(64);
             const tokenAmount = slice.loadCoins();
             const seller = slice.loadAddress();
-            const forwardPayload = parseForwardPayload(slice);
+            const forwardPayload = parseForwardPayload(slice, [OP_SELL_TOKENS]);
             if (!forwardPayload || forwardPayload.loadUint(32) !== OP_SELL_TOKENS) continue;
 
             const sellerStr = seller.toString();
@@ -1285,23 +1394,29 @@ async function pollDedustPools() {
       });
 
       if (previousReserve0 !== 0n && previousReserve1 !== 0n && tokenDelta > 0n && tonDelta > 0n) {
-        const at = new Date().toISOString();
-        const sequence = `${Date.now()}:${reserve0}:${reserve1}`;
+        const attribution = await resolveDedustSwapAttribution({ poolAddress, state, tradeType });
+        const at = attribution?.blockTime || new Date().toISOString();
+        const dedustTokenAmount = attribution?.amountIn && tradeType === 'sell' ? attribution.amountIn : tokenDelta;
+        const dedustTonAmount = attribution?.amountIn && tradeType === 'buy' ? attribution.amountIn : tonDelta;
+        const sequence = attribution?.txLt || `${Date.now()}:${reserve0}:${reserve1}`;
         await recordDexPoolMove({
           poolAddress,
           tokenAddress: state.tokenAddress,
           type: tradeType,
-          tokenAmount: tokenDelta,
-          tonAmount: tonDelta,
+          tokenAmount: dedustTokenAmount,
+          tonAmount: dedustTonAmount,
           marketCapTon,
           priceTon,
           at,
           sequence,
+          traderAddress: attribution?.traderAddress,
+          txHash: attribution?.txHash,
+          txLt: attribution?.txLt,
         });
         await upsertCandles({
           tokenAddress: state.tokenAddress,
           type: tradeType,
-          tonAmount: tonDelta,
+          tonAmount: dedustTonAmount,
           marketCapTon,
           priceTon,
           at,
