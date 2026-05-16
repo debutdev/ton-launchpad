@@ -20,12 +20,15 @@ import {
 } from '../lib/bondingCurve';
 import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS } from './deployment_config';
 import {
+  dedustAssetIsJetton,
+  dedustAssetIsNative,
   OP_DEDUST_JETTON_SWAP,
   OP_DEDUST_POOL_SWAP,
   OP_JETTON_NOTIFICATION,
   parseDedustJettonVaultSender,
   parseDedustNativeSwapPool,
   parseDedustPoolSwapBody,
+  parseDedustSwapEvent,
   parseForwardPayload,
   readBodyOp,
 } from './dedust_attribution';
@@ -52,6 +55,7 @@ const CURVE_POLL_INTERVAL_MS = Number(process.env.INDEXER_CURVE_POLL_INTERVAL_MS
 const POOL_POLL_INTERVAL_MS = Number(process.env.INDEXER_POOL_POLL_INTERVAL_MS || 6000);
 const CURVES_PER_TICK = Math.max(1, Number(process.env.INDEXER_CURVES_PER_TICK || 2));
 const POOLS_PER_TICK = Math.max(1, Number(process.env.INDEXER_POOLS_PER_TICK || 2));
+const BOOTSTRAP_TOKEN_LIMIT = Math.max(50, Number(process.env.INDEXER_BOOTSTRAP_TOKEN_LIMIT || 500));
 const RPC_RETRY_ATTEMPTS = Math.max(1, Number(process.env.INDEXER_RPC_RETRY_ATTEMPTS || 3));
 const RPC_RETRY_BASE_MS = Math.max(1000, Number(process.env.INDEXER_RPC_RETRY_BASE_MS || 4000));
 const INDEXER_LOCK_PATH = process.env.INDEXER_LOCK_PATH || path.join(process.cwd(), 'logs', 'indexer.lock');
@@ -84,6 +88,7 @@ const BUY_GAS_RESERVE = 100000000n;
 const MIGRATION_GAS_RESERVE = 1200000000n;
 const SELL_TAX_NUMERATOR = 2n;
 const SELL_TAX_DENOMINATOR = 100n;
+const DEDUST_EVENT_PARSER_VERSION = 3;
 
 type TokenRow = {
   address: string;
@@ -141,6 +146,8 @@ type DedustSwapAttribution = {
   amountIn: bigint;
 };
 
+type IndexerStateValue = Record<string, string | number | boolean | null>;
+
 const client = new TonClient({
   endpoint: process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC',
   apiKey: process.env.TONCENTER_API_KEY || undefined,
@@ -157,12 +164,15 @@ const dexPools = new Map<string, DexPoolState>();
 const pollRunning = new Map<string, boolean>();
 const lastRetryLog = new Map<string, number>();
 const invalidCurveAddresses = new Set<string>();
+const invalidPoolAddresses = new Set<string>();
 const autoSweepCooldown = new Map<string, number>();
 const autoSweepLastAttempt = new Map<string, { amount: bigint; at: number }>();
 const autoSweepInFlight = new Set<string>();
+const inMemoryIndexerState = new Map<string, IndexerStateValue>();
 let autoSweepWallet: Promise<{ wallet: any; secretKey: Buffer | Uint8Array; address: Address } | null> | null = null;
 let autoSweepQueue = Promise.resolve();
 let autoSweepMissingConfigLogged = false;
+let indexerStateUnavailableLogged = false;
 let curveCursor = 0;
 let poolCursor = 0;
 let sweepCursor = 0;
@@ -336,6 +346,82 @@ function selectBatch<T>(items: T[], cursor: number, count: number): { batch: T[]
     batch.push(items[(cursor + index) % items.length]);
   }
   return { batch, nextCursor: (cursor + size) % items.length };
+}
+
+function txLtValue(tx: { lt: string | number | bigint }): bigint {
+  return BigInt(tx.lt.toString());
+}
+
+function txHashHex(tx: { hash(): Buffer }): string {
+  return tx.hash().toString('hex');
+}
+
+function indexerStateKey(scope: string, id: string): string {
+  return `${scope}:${id}`;
+}
+
+async function loadIndexerState(key: string): Promise<IndexerStateValue> {
+  const memoryValue = inMemoryIndexerState.get(key);
+  if (memoryValue) return memoryValue;
+
+  const { data, error } = await supabase
+    .from('indexer_state')
+    .select('value')
+    .eq('key', key)
+    .maybeSingle();
+
+  if (error) {
+    if (!indexerStateUnavailableLogged) {
+      console.warn(`Indexer state table unavailable; using process memory only (${error.message})`);
+      indexerStateUnavailableLogged = true;
+    }
+    return {};
+  }
+
+  const value = (data?.value && typeof data.value === 'object' ? data.value : {}) as IndexerStateValue;
+  inMemoryIndexerState.set(key, value);
+  return value;
+}
+
+async function saveIndexerState(key: string, value: IndexerStateValue): Promise<void> {
+  inMemoryIndexerState.set(key, value);
+  const { error } = await supabase
+    .from('indexer_state')
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+
+  if (error && !indexerStateUnavailableLogged) {
+    console.warn(`Indexer state table unavailable; using process memory only (${error.message})`);
+    indexerStateUnavailableLogged = true;
+  }
+}
+
+async function savePoolIndexerState(poolAddress: string, state: DexPoolState): Promise<void> {
+  await saveIndexerState(indexerStateKey('dedust_pool', poolAddress), {
+    lastReserve0: state.lastReserve0.toString(),
+    lastReserve1: state.lastReserve1.toString(),
+    lastPoolLt: state.lastPoolLt?.toString() || null,
+    parserVersion: DEDUST_EVENT_PARSER_VERSION,
+    tokenReserveIndex: state.tokenReserveIndex,
+    nativeVaultAddress: state.nativeVaultAddress || null,
+    jettonVaultAddress: state.jettonVaultAddress || null,
+  });
+}
+
+async function hydratePoolIndexerState(poolAddress: string, state: DexPoolState): Promise<void> {
+  const persisted = await loadIndexerState(indexerStateKey('dedust_pool', poolAddress));
+  const parserVersionMatches = Number(persisted.parserVersion || 0) === DEDUST_EVENT_PARSER_VERSION;
+  state.lastReserve0 = parseNano(persisted.lastReserve0) || state.lastReserve0;
+  state.lastReserve1 = parseNano(persisted.lastReserve1) || state.lastReserve1;
+  state.lastPoolLt = parserVersionMatches ? parseNano(persisted.lastPoolLt) || state.lastPoolLt : undefined;
+  state.tokenReserveIndex = persisted.tokenReserveIndex === 0 || persisted.tokenReserveIndex === 1
+    ? persisted.tokenReserveIndex
+    : state.tokenReserveIndex;
+  state.nativeVaultAddress = typeof persisted.nativeVaultAddress === 'string' && persisted.nativeVaultAddress
+    ? persisted.nativeVaultAddress
+    : state.nativeVaultAddress;
+  state.jettonVaultAddress = typeof persisted.jettonVaultAddress === 'string' && persisted.jettonVaultAddress
+    ? persisted.jettonVaultAddress
+    : state.jettonVaultAddress;
 }
 
 function startPoller(label: string, intervalMs: number, fn: () => Promise<void>) {
@@ -553,6 +639,13 @@ function markInvalidCurve(address: string, reason: string) {
   invalidCurveAddresses.add(address);
   bondingCurves.delete(address);
   console.warn(`Skipping non-readable curve ${address.slice(0, 12)}...: ${reason}`);
+}
+
+function markInvalidPool(address: string, reason: string) {
+  if (invalidPoolAddresses.has(address)) return;
+  invalidPoolAddresses.add(address);
+  dexPools.delete(address);
+  console.warn(`Skipping non-readable DeDust pool ${address.slice(0, 12)}...: ${reason}`);
 }
 
 function readHttpBody(request: http.IncomingMessage): Promise<string> {
@@ -915,6 +1008,8 @@ async function recordDexPoolMove(args: {
     platform_revenue_token_amount: feeTokenAmount.toString(),
     token_price_ton: args.priceTon.toString(),
     token_price_usd: (Number(args.priceTon) / 1e9 * TON_USD_PRICE).toString(),
+    virtual_ton_after: '0',
+    virtual_token_after: '0',
     market_cap_ton_after: args.marketCapTon.toString(),
     price_ton_after: args.priceTon.toString(),
     block_time: args.at,
@@ -997,6 +1092,29 @@ async function upsertCandles(args: {
   }
 }
 
+async function registerDedustPool(args: {
+  poolAddress: string;
+  tokenAddress: string;
+  jettonAddress: string;
+  nativeVaultAddress?: string;
+  jettonVaultAddress?: string;
+}): Promise<DexPoolState> {
+  const existing = dexPools.get(args.poolAddress);
+  const state: DexPoolState = {
+    tokenAddress: args.tokenAddress,
+    jettonAddress: args.jettonAddress,
+    lastReserve0: existing?.lastReserve0 || 0n,
+    lastReserve1: existing?.lastReserve1 || 0n,
+    lastPoolLt: existing?.lastPoolLt,
+    tokenReserveIndex: existing?.tokenReserveIndex ?? null,
+    nativeVaultAddress: args.nativeVaultAddress || existing?.nativeVaultAddress,
+    jettonVaultAddress: args.jettonVaultAddress || existing?.jettonVaultAddress,
+  };
+  await hydratePoolIndexerState(args.poolAddress, state);
+  dexPools.set(args.poolAddress, state);
+  return state;
+}
+
 async function deriveDedustPool(tokenAddress: string, jettonAddress: string): Promise<string | null> {
   if (!DEDUST_FACTORY) return null;
   try {
@@ -1009,12 +1127,10 @@ async function deriveDedustPool(tokenAddress: string, jettonAddress: string): Pr
       factory.getVaultAddress(Asset.jetton(jetton)),
     ]);
     const pool = poolAddress.toString();
-    dexPools.set(pool, {
+    await registerDedustPool({
+      poolAddress: pool,
       tokenAddress,
       jettonAddress,
-      lastReserve0: 0n,
-      lastReserve1: 0n,
-      tokenReserveIndex: null,
       nativeVaultAddress: nativeVault.toString(),
       jettonVaultAddress: jettonVault.toString(),
     });
@@ -1052,6 +1168,9 @@ async function updateReserves(bcAddress: string): Promise<ReserveSnapshot | null
     const stonPoolAddress = migrated && jettonAddress && !row?.ston_pool_address
       ? await deriveDedustPool(bcAddress, jettonAddress)
       : row?.ston_pool_address || null;
+    if (migrated && stonPoolAddress && jettonAddress && !dexPools.has(stonPoolAddress)) {
+      await registerDedustPool({ poolAddress: stonPoolAddress, tokenAddress: bcAddress, jettonAddress });
+    }
 
     await updateToken(bcAddress, {
       virtual_ton_reserves: virtualTonReserves.toString(),
@@ -1069,6 +1188,15 @@ async function updateReserves(bcAddress: string): Promise<ReserveSnapshot | null
       ston_pool_address: stonPoolAddress,
       lp_status: migrationState >= 2 ? 'locked' : migrationState === 1 ? 'migrating' : 'pending',
     });
+
+    if (migrated && stonPoolAddress) {
+      const poolState = dexPools.get(stonPoolAddress);
+      if (poolState) {
+        await pollDedustPool(stonPoolAddress, poolState).catch((error) => {
+          console.error(`Immediate DeDust sync error (${stonPoolAddress.slice(0, 12)}...):`, error instanceof Error ? error.message : error);
+        });
+      }
+    }
 
     return { virtualTonReserves, virtualTokenReserves, realTonReserves, realTokenReserves, currentSupply, migrationState, migrated, marketCapTon, priceTon };
   } catch (error) {
@@ -1156,6 +1284,18 @@ async function refreshTradeCount(tokenAddress: string) {
   await updateToken(tokenAddress, { tx_count: count || 0 });
 }
 
+async function dedustTradeAlreadyIndexed(tokenAddress: string, txLt: string, type: 'buy' | 'sell'): Promise<boolean> {
+  const { count, error } = await supabase
+    .from('trades')
+    .select('id', { count: 'exact', head: true })
+    .eq('token_address', tokenAddress)
+    .eq('source', 'dedust')
+    .eq('tx_lt', txLt)
+    .eq('type', type);
+  if (error) return false;
+  return (count || 0) > 0;
+}
+
 async function handleTokenDeployed(body: Cell) {
   const slice = body.beginParse();
   if (slice.loadUint(32) !== OP_TOKEN_DEPLOYED) return;
@@ -1174,6 +1314,7 @@ async function handleTokenDeployed(body: Cell) {
   const existing = await getTokenRow(bcAddrStr);
   if (existing) {
     bondingCurves.set(bcAddrStr, { address: bcAddrStr });
+    await updateReserves(bcAddrStr);
     return;
   }
 
@@ -1202,16 +1343,27 @@ async function handleTokenDeployed(body: Cell) {
   }, 'token.created');
 
   bondingCurves.set(bcAddrStr, { address: bcAddrStr });
+  await updateReserves(bcAddrStr);
 }
 
 async function pollFactory() {
   try {
+    const stateKey = indexerStateKey('factory', FACTORY_ADDRESS);
+    const persisted = await loadIndexerState(stateKey);
+    const lastFactoryLt = parseNano(persisted.lastLt);
     const txs = await retry('getTransactions(factory)', () =>
-      client.getTransactions(Address.parse(FACTORY_ADDRESS), { limit: 20, archival: false }),
+      client.getTransactions(Address.parse(FACTORY_ADDRESS), { limit: 50, archival: false }),
     );
+    const orderedTxs = [...txs].sort((a, b) => {
+      const aLt = txLtValue(a);
+      const bLt = txLtValue(b);
+      return aLt < bLt ? -1 : aLt > bLt ? 1 : 0;
+    });
 
-    for (const tx of txs) {
-      const txHash = tx.hash().toString('hex');
+    for (const tx of orderedTxs) {
+      const txLt = txLtValue(tx);
+      if (lastFactoryLt && txLt <= lastFactoryLt) continue;
+      const txHash = txHashHex(tx);
       if (seenTxs.has(txHash)) continue;
       seenTxs.add(txHash);
 
@@ -1224,6 +1376,7 @@ async function pollFactory() {
           }
         }
       }
+      await saveIndexerState(stateKey, { lastLt: txLt.toString(), lastHash: txHash });
     }
   } catch (error) {
     console.error('Factory poll error:', error instanceof Error ? error.message : error);
@@ -1349,74 +1502,68 @@ async function pollBondingCurves() {
   }
 }
 
-async function pollDedustPools() {
-  const poolEntries = Array.from(dexPools.entries());
-  const selected = selectBatch(poolEntries, poolCursor, POOLS_PER_TICK);
-  poolCursor = selected.nextCursor;
+function dedustEventTradeType(event: NonNullable<ReturnType<typeof parseDedustSwapEvent>>, jetton: Address): 'buy' | 'sell' | null {
+  if (dedustAssetIsNative(event.assetIn) && dedustAssetIsJetton(event.assetOut, jetton)) return 'buy';
+  if (dedustAssetIsJetton(event.assetIn, jetton) && dedustAssetIsNative(event.assetOut)) return 'sell';
+  return null;
+}
 
-  for (const [poolAddress, state] of selected.batch) {
-    try {
-      const pool = client.open(Pool.createFromAddress(Address.parse(poolAddress)));
-      const [reserves, assets] = await Promise.all([
-        pool.getReserves(),
-        pool.getAssets(),
-      ]);
-      const data: DexPoolData = { reserve0: reserves[0], reserve1: reserves[1], assets };
-      await ensureDexPoolState(poolAddress, state, data);
-      const reserve0 = data.reserve0;
-      const reserve1 = data.reserve1;
-      if (reserve0 <= 0n || reserve1 <= 0n) continue;
-      if (reserve0 === state.lastReserve0 && reserve1 === state.lastReserve1) continue;
-      const previousReserve0 = state.lastReserve0;
-      const previousReserve1 = state.lastReserve1;
+async function processDedustPoolTransactions(poolAddress: string, state: DexPoolState, data: DexPoolData): Promise<boolean> {
+  const pool = Address.parse(poolAddress);
+  const jetton = Address.parse(state.jettonAddress);
+  const txs = await retry('getTransactions(dedust pool)', () =>
+    client.getTransactions(pool, { limit: 40, archival: false }),
+  );
+  const orderedTxs = [...txs].sort((a, b) => {
+    const aLt = txLtValue(a);
+    const bLt = txLtValue(b);
+    return aLt < bLt ? -1 : aLt > bLt ? 1 : 0;
+  });
+  let recorded = false;
 
-      const { marketCapTon, priceTon } = poolMarketData(state, data);
-      const previousTokenReserve = state.tokenReserveIndex === 1 ? previousReserve1 : previousReserve0;
-      const previousTonReserve = state.tokenReserveIndex === 1 ? previousReserve0 : previousReserve1;
-      const currentTokenReserve = state.tokenReserveIndex === 1 ? reserve1 : reserve0;
-      const currentTonReserve = state.tokenReserveIndex === 1 ? reserve0 : reserve1;
-      const tokenDelta = previousTokenReserve === 0n ? 0n : (currentTokenReserve > previousTokenReserve ? currentTokenReserve - previousTokenReserve : previousTokenReserve - currentTokenReserve);
-      const tonDelta = previousTonReserve === 0n ? 0n : (currentTonReserve > previousTonReserve ? currentTonReserve - previousTonReserve : previousTonReserve - currentTonReserve);
-      const tradeType = previousTokenReserve !== 0n && currentTokenReserve > previousTokenReserve ? 'sell' : 'buy';
-      state.lastReserve0 = reserve0;
-      state.lastReserve1 = reserve1;
+  for (const tx of orderedTxs) {
+    const currentLt = txLtValue(tx);
+    if (state.lastPoolLt && currentLt <= state.lastPoolLt) continue;
 
-      await updateToken(state.tokenAddress, {
-        ston_pool_address: poolAddress,
-        token_price_ton: priceTon.toString(),
-        token_price_usd: (Number(priceTon) / 1e9 * TON_USD_PRICE).toString(),
-        market_cap_ton: marketCapTon.toString(),
-        market_cap_usd: (Number(marketCapTon) / 1e9 * TON_USD_PRICE).toString(),
-        migration_state: 2,
-        is_migrated: true,
-        migrated: true,
-        lp_status: 'locked',
+    let eventIndex = 0;
+    for (const outMsg of tx.outMessages.values()) {
+      const event = parseDedustSwapEvent(outMsg.body);
+      if (!event) continue;
+      const tradeType = dedustEventTradeType(event, jetton);
+      if (!tradeType) continue;
+
+      const eventData: DexPoolData = { reserve0: event.reserve0, reserve1: event.reserve1, assets: data.assets };
+      const { marketCapTon, priceTon } = poolMarketData(state, eventData);
+      const tokenAmount = tradeType === 'buy' ? event.amountOut : event.amountIn;
+      const tonAmount = tradeType === 'buy' ? event.amountIn : event.amountOut;
+      const at = txTime(tx);
+      const txLt = currentLt.toString();
+      if (await dedustTradeAlreadyIndexed(state.tokenAddress, txLt, tradeType)) {
+        eventIndex += 1;
+        continue;
+      }
+      const txHash = `dedust:${poolAddress}:${txHashHex(tx)}:${eventIndex}`;
+
+      const trade = await recordDexPoolMove({
+        poolAddress,
+        tokenAddress: state.tokenAddress,
+        type: tradeType,
+        tokenAmount,
+        tonAmount,
+        marketCapTon,
+        priceTon,
+        at,
+        sequence: `${txLt}:${eventIndex}`,
+        traderAddress: event.sender.toString(),
+        txHash,
+        txLt,
       });
-
-      if (previousReserve0 !== 0n && previousReserve1 !== 0n && tokenDelta > 0n && tonDelta > 0n) {
-        const attribution = await resolveDedustSwapAttribution({ poolAddress, state, tradeType });
-        const at = attribution?.blockTime || new Date().toISOString();
-        const dedustTokenAmount = attribution?.amountIn && tradeType === 'sell' ? attribution.amountIn : tokenDelta;
-        const dedustTonAmount = attribution?.amountIn && tradeType === 'buy' ? attribution.amountIn : tonDelta;
-        const sequence = attribution?.txLt || `${Date.now()}:${reserve0}:${reserve1}`;
-        await recordDexPoolMove({
-          poolAddress,
-          tokenAddress: state.tokenAddress,
-          type: tradeType,
-          tokenAmount: dedustTokenAmount,
-          tonAmount: dedustTonAmount,
-          marketCapTon,
-          priceTon,
-          at,
-          sequence,
-          traderAddress: attribution?.traderAddress,
-          txHash: attribution?.txHash,
-          txLt: attribution?.txLt,
-        });
+      if (trade) {
+        recorded = true;
         await upsertCandles({
           tokenAddress: state.tokenAddress,
           type: tradeType,
-          tonAmount: dedustTonAmount,
+          tonAmount,
           marketCapTon,
           priceTon,
           at,
@@ -1430,8 +1577,116 @@ async function pollDedustPools() {
           });
         }
       }
+      eventIndex += 1;
+    }
+
+    state.lastPoolLt = currentLt;
+  }
+
+  return recorded;
+}
+
+async function processDedustReserveFallback(args: {
+  poolAddress: string;
+  state: DexPoolState;
+  data: DexPoolData;
+  previousReserve0: bigint;
+  previousReserve1: bigint;
+}) {
+  const { poolAddress, state, data, previousReserve0, previousReserve1 } = args;
+  if (previousReserve0 === 0n || previousReserve1 === 0n) return;
+  if (data.reserve0 === previousReserve0 && data.reserve1 === previousReserve1) return;
+
+  const previousTokenReserve = state.tokenReserveIndex === 1 ? previousReserve1 : previousReserve0;
+  const previousTonReserve = state.tokenReserveIndex === 1 ? previousReserve0 : previousReserve1;
+  const currentTokenReserve = state.tokenReserveIndex === 1 ? data.reserve1 : data.reserve0;
+  const currentTonReserve = state.tokenReserveIndex === 1 ? data.reserve0 : data.reserve1;
+  const tokenDelta = currentTokenReserve > previousTokenReserve ? currentTokenReserve - previousTokenReserve : previousTokenReserve - currentTokenReserve;
+  const tonDelta = currentTonReserve > previousTonReserve ? currentTonReserve - previousTonReserve : previousTonReserve - currentTonReserve;
+  if (tokenDelta <= 0n || tonDelta <= 0n) return;
+
+  const tradeType = currentTokenReserve > previousTokenReserve ? 'sell' : 'buy';
+  const attribution = await resolveDedustSwapAttribution({ poolAddress, state, tradeType });
+  const { marketCapTon, priceTon } = poolMarketData(state, data);
+  const at = attribution?.blockTime || new Date().toISOString();
+  const dedustTokenAmount = attribution?.amountIn && tradeType === 'sell' ? attribution.amountIn : tokenDelta;
+  const dedustTonAmount = attribution?.amountIn && tradeType === 'buy' ? attribution.amountIn : tonDelta;
+  if (attribution?.txLt && await dedustTradeAlreadyIndexed(state.tokenAddress, attribution.txLt, tradeType)) return;
+  await recordDexPoolMove({
+    poolAddress,
+    tokenAddress: state.tokenAddress,
+    type: tradeType,
+    tokenAmount: dedustTokenAmount,
+    tonAmount: dedustTonAmount,
+    marketCapTon,
+    priceTon,
+    at,
+    sequence: attribution?.txLt || `${Date.now()}:${data.reserve0}:${data.reserve1}`,
+    traderAddress: attribution?.traderAddress,
+    txHash: attribution?.txHash,
+    txLt: attribution?.txLt,
+  });
+  await upsertCandles({
+    tokenAddress: state.tokenAddress,
+    type: tradeType,
+    tonAmount: dedustTonAmount,
+    marketCapTon,
+    priceTon,
+    at,
+  });
+}
+
+async function pollDedustPool(poolAddress: string, state: DexPoolState) {
+  const pool = client.open(Pool.createFromAddress(Address.parse(poolAddress)));
+  const [reserves, assets] = await Promise.all([
+    pool.getReserves(),
+    pool.getAssets(),
+  ]);
+  const data: DexPoolData = { reserve0: reserves[0], reserve1: reserves[1], assets };
+  await ensureDexPoolState(poolAddress, state, data);
+  if (data.reserve0 <= 0n || data.reserve1 <= 0n) return;
+
+  const previousReserve0 = state.lastReserve0;
+  const previousReserve1 = state.lastReserve1;
+  const { marketCapTon, priceTon } = poolMarketData(state, data);
+
+  await updateToken(state.tokenAddress, {
+    ston_pool_address: poolAddress,
+    token_price_ton: priceTon.toString(),
+    token_price_usd: (Number(priceTon) / 1e9 * TON_USD_PRICE).toString(),
+    market_cap_ton: marketCapTon.toString(),
+    market_cap_usd: (Number(marketCapTon) / 1e9 * TON_USD_PRICE).toString(),
+    migration_state: 2,
+    is_migrated: true,
+    migrated: true,
+    lp_status: 'locked',
+  });
+
+  const recordedFromEvents = await processDedustPoolTransactions(poolAddress, state, data);
+  if (!recordedFromEvents) {
+    await processDedustReserveFallback({ poolAddress, state, data, previousReserve0, previousReserve1 });
+  }
+
+  state.lastReserve0 = data.reserve0;
+  state.lastReserve1 = data.reserve1;
+  await savePoolIndexerState(poolAddress, state);
+}
+
+async function pollDedustPools() {
+  const poolEntries = Array.from(dexPools.entries());
+  const selected = selectBatch(poolEntries, poolCursor, POOLS_PER_TICK);
+  poolCursor = selected.nextCursor;
+
+  for (const [poolAddress, state] of selected.batch) {
+    try {
+      await pollDedustPool(poolAddress, state);
     } catch (error) {
-      console.error(`DeDust pool poll error (${poolAddress.slice(0, 12)}...):`, error instanceof Error ? error.message : error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('exit_code: -13') || message.includes('Unable to execute get method')) {
+        markInvalidPool(poolAddress, message);
+      } else {
+        console.error(`DeDust pool poll error (${poolAddress.slice(0, 12)}...):`, message);
+      }
     }
   }
 }
@@ -1458,7 +1713,7 @@ async function bootstrap() {
     .from('tokens')
     .select('address, jetton_address, master_address, migrated, is_migrated, migration_state, ston_pool_address, created_at')
     .order('created_at', { ascending: false })
-    .limit(50);
+    .limit(BOOTSTRAP_TOKEN_LIMIT);
   if (error) {
     console.error('Bootstrap error:', error.message);
     return;
@@ -1471,10 +1726,14 @@ async function bootstrap() {
       if (reserves) bondingCurves.set(token.address, { address: token.address });
       await sleep(250);
     }
-    const pool = token.ston_pool_address;
+    let pool = token.ston_pool_address;
     const jetton = token.jetton_address || token.master_address || '';
+    if ((Number(token.migration_state || 0) >= 2 || token.migrated || token.is_migrated) && !pool && jetton) {
+      pool = await deriveDedustPool(token.address, jetton);
+      await sleep(250);
+    }
     if (pool && jetton) {
-      dexPools.set(pool, { tokenAddress: token.address, jettonAddress: jetton, lastReserve0: 0n, lastReserve1: 0n, tokenReserveIndex: null });
+      await registerDedustPool({ poolAddress: pool, tokenAddress: token.address, jettonAddress: jetton });
     }
   }
   console.log(`Watching ${bondingCurves.size} active curves and ${dexPools.size} DeDust pools`);
@@ -1490,8 +1749,8 @@ async function main() {
   console.log(`Auto fee sweep: ${AUTO_SWEEP_FEES_ENABLED ? 'enabled' : 'disabled'}`);
   console.log(`Live webhook: ${LIVE_EVENTS_WEBHOOK_URL || 'disabled'}`);
 
-  await bootstrap();
   startTonapiWebhookReceiver();
+  await bootstrap();
   startPoller('factory', FACTORY_POLL_INTERVAL_MS, pollFactory);
   startPoller('curves', CURVE_POLL_INTERVAL_MS, pollBondingCurves);
   startPoller('dedust-pools', POOL_POLL_INTERVAL_MS, pollDedustPools);

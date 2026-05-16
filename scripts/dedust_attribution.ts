@@ -4,6 +4,42 @@ export const OP_JETTON_NOTIFICATION = 0x7362d09c;
 export const OP_DEDUST_JETTON_SWAP = 0xe3a0d482;
 export const OP_DEDUST_NATIVE_SWAP = 0xea06185d;
 export const OP_DEDUST_POOL_SWAP = 0x61ee542d;
+export const OP_DEDUST_SWAP_EVENT = 0x9c610de3;
+
+export type DedustAsset =
+  | { type: 'native' }
+  | { type: 'jetton'; address: Address };
+
+export type DedustSwapEvent = {
+  assetIn: DedustAsset;
+  assetOut: DedustAsset;
+  amountIn: bigint;
+  amountOut: bigint;
+  sender: Address;
+  reserve0: bigint;
+  reserve1: bigint;
+};
+
+export function dedustAssetIsNative(asset: DedustAsset): boolean {
+  return asset.type === 'native';
+}
+
+export function dedustAssetIsJetton(asset: DedustAsset, jetton: Address): boolean {
+  return asset.type === 'jetton' && asset.address.equals(jetton);
+}
+
+function parseDedustAsset(slice: Slice): DedustAsset | null {
+  try {
+    const tag = slice.loadUint(4);
+    if (tag === 0) return { type: 'native' };
+    if (tag !== 1) return null;
+    const workchain = slice.loadInt(8);
+    const hash = slice.loadBuffer(32);
+    return { type: 'jetton', address: new Address(workchain, hash) };
+  } catch {
+    return null;
+  }
+}
 
 export function parseForwardPayload(slice: Slice, directOps: number[] = [OP_DEDUST_JETTON_SWAP]): Slice | null {
   const payloadCell = beginCell().storeSlice(slice).endCell();
@@ -46,6 +82,27 @@ export function parseDedustPoolSwapBody(body: Cell | null | undefined): { sender
     const amountIn = slice.loadCoins();
     const sender = slice.loadAddress();
     return { sender, amountIn };
+  } catch {
+    return null;
+  }
+}
+
+export function parseDedustSwapEvent(body: Cell | null | undefined): DedustSwapEvent | null {
+  if (!body) return null;
+  try {
+    const slice = body.beginParse();
+    if (slice.loadUint(32) !== OP_DEDUST_SWAP_EVENT) return null;
+    const assetIn = parseDedustAsset(slice);
+    const assetOut = parseDedustAsset(slice);
+    if (!assetIn || !assetOut) return null;
+    const amountIn = slice.loadCoins();
+    const amountOut = slice.loadCoins();
+    const details = slice.loadRef().beginParse();
+    const sender = details.loadAddress();
+    details.loadAddressAny();
+    const reserve0 = details.loadCoins();
+    const reserve1 = details.loadCoins();
+    return { assetIn, assetOut, amountIn, amountOut, sender, reserve0, reserve1 };
   } catch {
     return null;
   }

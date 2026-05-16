@@ -150,3 +150,14 @@ CREATE INDEX IF NOT EXISTS idx_token_candles_token_time
     ON token_candles(token_address, timeframe, bucket_start DESC);
 
 ALTER PUBLICATION supabase_realtime ADD TABLE token_candles;
+
+CREATE TABLE IF NOT EXISTS indexer_state (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE indexer_state ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow service_role manage indexer_state" ON indexer_state
+    FOR ALL TO service_role USING (true) WITH CHECK (true);

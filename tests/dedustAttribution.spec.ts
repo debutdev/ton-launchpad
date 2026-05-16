@@ -1,12 +1,16 @@
 import { Address, Cell, beginCell } from '@ton/core';
 import {
+  OP_DEDUST_SWAP_EVENT,
   OP_DEDUST_JETTON_SWAP,
   OP_DEDUST_NATIVE_SWAP,
   OP_DEDUST_POOL_SWAP,
   OP_JETTON_NOTIFICATION,
+  dedustAssetIsJetton,
+  dedustAssetIsNative,
   parseDedustJettonVaultSender,
   parseDedustNativeSwapPool,
   parseDedustPoolSwapBody,
+  parseDedustSwapEvent,
   parseForwardPayload,
 } from '../scripts/dedust_attribution';
 
@@ -16,6 +20,14 @@ function address(seed: string): Address {
 
 function refForwardPayload(payload: Cell) {
   return beginCell().storeBit(1).storeRef(payload).endCell();
+}
+
+function storeDedustNativeAsset() {
+  return beginCell().storeUint(0, 4);
+}
+
+function storeDedustJettonAsset(jetton: Address) {
+  return beginCell().storeUint(1, 4).storeInt(jetton.workChain, 8).storeBuffer(jetton.hash);
 }
 
 describe('DeDust attribution parsers', () => {
@@ -50,6 +62,36 @@ describe('DeDust attribution parsers', () => {
       .endCell();
 
     expect(parseDedustNativeSwapPool(body)?.equals(pool)).toBe(true);
+  });
+
+  it('parses DeDust swap events with sender, amounts, and reserves', () => {
+    const jetton = address('3');
+    const body = beginCell()
+      .storeUint(OP_DEDUST_SWAP_EVENT, 32)
+      .storeBuilder(storeDedustNativeAsset())
+      .storeBuilder(storeDedustJettonAsset(jetton))
+      .storeCoins(111n)
+      .storeCoins(222n)
+      .storeRef(
+        beginCell()
+          .storeAddress(sender)
+          .storeAddress(null)
+          .storeCoins(333n)
+          .storeCoins(444n)
+          .endCell(),
+      )
+      .endCell();
+
+    const parsed = parseDedustSwapEvent(body);
+
+    expect(parsed).not.toBeNull();
+    expect(dedustAssetIsNative(parsed!.assetIn)).toBe(true);
+    expect(dedustAssetIsJetton(parsed!.assetOut, jetton)).toBe(true);
+    expect(parsed!.sender.equals(sender)).toBe(true);
+    expect(parsed!.amountIn).toBe(111n);
+    expect(parsed!.amountOut).toBe(222n);
+    expect(parsed!.reserve0).toBe(333n);
+    expect(parsed!.reserve1).toBe(444n);
   });
 
   it('parses the original sender from a jetton-vault notification with DeDust swap payload', () => {

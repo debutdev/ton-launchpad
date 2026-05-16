@@ -2,6 +2,7 @@ import { Address, Cell, SendMode, beginCell, toNano } from '@ton/core';
 import { TonClient, WalletContractV5R1, internal } from '@ton/ton';
 import { mnemonicToWalletKey } from '@ton/crypto';
 import { Asset, Factory, Pool, PoolType, ReadinessStatus } from '@dedust/sdk';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import { buyTokensBody, jettonTransferBody } from '../wrappers/acton/LaunchpadActon';
 
@@ -26,6 +27,13 @@ type DedustAddresses = {
   nativeVault: Address;
   jettonVault: Address;
   pool: Address;
+};
+
+type IndexedToken = {
+  address: string;
+  jetton_address: string | null;
+  migration_state: number | string | null;
+  ston_pool_address: string | null;
 };
 
 function hasFlag(flag: string): boolean {
@@ -63,6 +71,101 @@ async function retry<T>(label: string, fn: () => Promise<T>, attempts = 20): Pro
     }
   }
   throw lastError;
+}
+
+function getSupabase(): SupabaseClient {
+  const url = requireEnv('SUPABASE_URL');
+  const key = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
+  return createClient(url, key);
+}
+
+async function waitForIndexedToken(supabase: SupabaseClient, curve: Address, master: Address): Promise<IndexedToken> {
+  const curveAddress = curve.toString();
+  const masterAddress = master.toString();
+  for (let attempt = 1; attempt <= 60; attempt += 1) {
+    const { data, error } = await supabase
+      .from('tokens')
+      .select('address, jetton_address, migration_state, ston_pool_address')
+      .or(`address.eq.${curveAddress},jetton_address.eq.${masterAddress},master_address.eq.${masterAddress}`)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(`Supabase token query failed: ${error.message}`);
+    if (data?.address) return data as IndexedToken;
+    await sleep(3000);
+  }
+  throw new Error('Timed out waiting for indexer to insert launched token');
+}
+
+async function waitForIndexedMigration(supabase: SupabaseClient, curve: Address, pool: Address): Promise<IndexedToken> {
+  const curveAddress = curve.toString();
+  const poolAddress = pool.toString();
+  for (let attempt = 1; attempt <= 80; attempt += 1) {
+    const { data, error } = await supabase
+      .from('tokens')
+      .select('address, jetton_address, migration_state, ston_pool_address')
+      .eq('address', curveAddress)
+      .maybeSingle();
+    if (error) throw new Error(`Supabase migration query failed: ${error.message}`);
+    const token = data as IndexedToken | null;
+    if (token && Number(token.migration_state || 0) >= 2 && token.ston_pool_address === poolAddress) return token;
+    await sleep(3000);
+  }
+  throw new Error('Timed out waiting for indexer to register migrated DeDust pool');
+}
+
+async function waitForIndexedPoolCursor(supabase: SupabaseClient, pool: Address): Promise<void> {
+  const key = `dedust_pool:${pool.toString()}`;
+  for (let attempt = 1; attempt <= 40; attempt += 1) {
+    const { data, error } = await supabase
+      .from('indexer_state')
+      .select('key, value')
+      .eq('key', key)
+      .maybeSingle();
+    if (error) throw new Error(`Supabase indexer_state query failed: ${error.message}`);
+    if (data?.value) return;
+    await sleep(3000);
+  }
+  throw new Error('Timed out waiting for indexer to persist DeDust pool cursor');
+}
+
+async function waitForIndexedDedustTrade(
+  supabase: SupabaseClient,
+  curve: Address,
+  type: 'buy' | 'sell',
+  wallet: Address,
+  sinceIso: string,
+): Promise<void> {
+  const curveAddress = curve.toString();
+  const walletAddress = wallet.toString();
+  for (let attempt = 1; attempt <= 60; attempt += 1) {
+    const { data, error } = await supabase
+      .from('trades')
+      .select('tx_hash, trader_address, user_address, ton_amount, token_amount, block_time')
+      .eq('token_address', curveAddress)
+      .eq('source', 'dedust')
+      .eq('type', type)
+      .gte('created_at', sinceIso)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (error) throw new Error(`Supabase DeDust trade query failed: ${error.message}`);
+    const attributed = (data || []).find((trade: any) => trade.trader_address === walletAddress || trade.user_address === walletAddress);
+    if (attributed) return;
+    await sleep(3000);
+  }
+  throw new Error(`Timed out waiting for indexed attributed DeDust ${type}`);
+}
+
+async function waitForCandles(supabase: SupabaseClient, curve: Address): Promise<void> {
+  for (let attempt = 1; attempt <= 40; attempt += 1) {
+    const { count, error } = await supabase
+      .from('token_candles')
+      .select('token_address', { count: 'exact', head: true })
+      .eq('token_address', curve.toString());
+    if (error) throw new Error(`Supabase candle query failed: ${error.message}`);
+    if ((count || 0) > 0) return;
+    await sleep(3000);
+  }
+  throw new Error('Timed out waiting for indexed candles');
 }
 
 async function waitSeqno(wallet: { getSeqno(): Promise<number> }, seqno: number): Promise<void> {
@@ -347,6 +450,7 @@ async function main() {
 
   const endpoint = process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC';
   const client = new TonClient({ endpoint, apiKey: requireEnv('TONCENTER_API_KEY') });
+  const supabase = getSupabase();
   const mnemonic = requireEnv('WALLET_MNEMONIC').split(/\s+/);
   const factory = Address.parse(process.env.ACTON_TESTNET_FACTORY_ADDRESS || process.env.NEXT_PUBLIC_FACTORY_ADDRESS || '');
   const platform = Address.parse(requireEnv('TESTNET_PLATFORM_WALLET'));
@@ -393,6 +497,8 @@ async function main() {
   const token = await findTokenDeployed(client, factory, queryId);
   console.log(`Curve: ${token.curve.toString({ testOnly: true })}`);
   console.log(`Jetton master: ${token.master.toString({ testOnly: true })}`);
+  console.log('Waiting for indexer to insert token...');
+  await waitForIndexedToken(supabase, token.curve, token.master);
 
   const userJettonWallet = await walletAddress(client, token.master, wallet.address);
   const platformJettonWallet = await walletAddress(client, token.master, platform);
@@ -421,18 +527,21 @@ async function main() {
   console.log(`Migration state: ${state} (2=migrated, 3=failed)`);
   if (state !== 2) throw new Error('Token did not migrate successfully');
 
-  await sleep(20000);
   const poolContract = client.open(Pool.createFromAddress(dedust.pool));
   const readiness = await retry('get DeDust pool readiness', () => poolContract.getReadinessStatus());
   console.log(`DeDust pool readiness: ${readiness}`);
   if (readiness !== ReadinessStatus.READY) {
     throw new Error(`DeDust pool is not ready after migration: ${readiness}`);
   }
+  console.log('Waiting for indexer to register migrated pool...');
+  await waitForIndexedMigration(supabase, token.curve, dedust.pool);
+  await waitForIndexedPoolCursor(supabase, dedust.pool);
 
   const migratedTokenBalance = await jettonBalance(client, userJettonWallet);
   console.log(`User token balance after migration buy: ${formatTokens(migratedTokenBalance)} ${TEST11_SYMBOL}`);
 
   console.log('Buying migrated token through DeDust...');
+  const dexBuyStartedAt = new Date(Date.now() - 5000).toISOString();
   const beforeDexBuyBalance = await jettonBalance(client, userJettonWallet);
   const buyAmount = toNano('0.02');
   await sendOne({
@@ -454,8 +563,10 @@ async function main() {
   console.log(`User token balance before DeDust buy: ${formatTokens(beforeDexBuyBalance)}`);
   console.log(`User token balance after DeDust buy: ${formatTokens(afterDexBuyBalance)}`);
   if (afterDexBuyBalance <= beforeDexBuyBalance) throw new Error('Migrated DeDust buy did not increase token balance');
+  await waitForIndexedDedustTrade(supabase, token.curve, 'buy', wallet.address, dexBuyStartedAt);
 
   console.log('Selling migrated token through DeDust...');
+  const dexSellStartedAt = new Date(Date.now() - 5000).toISOString();
   const platformBefore = await jettonBalance(client, platformJettonWallet);
   const swapAmount = afterDexBuyBalance / 10n;
   const expectedFeeTokens = (swapAmount * 2n) / 100n;
@@ -490,6 +601,8 @@ async function main() {
   if (platformDelta < expectedFeeTokens) {
     throw new Error('Platform fee token delta was below expected 2% sell tax');
   }
+  await waitForIndexedDedustTrade(supabase, token.curve, 'sell', wallet.address, dexSellStartedAt);
+  await waitForCandles(supabase, token.curve);
 
   const balanceAfter = await retry('getBalance(wallet)', () => client.getBalance(wallet.address));
   console.log(`Balance after: ${formatTon(balanceAfter)} TON`);

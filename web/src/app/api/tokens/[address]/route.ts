@@ -5,11 +5,12 @@ import {
   type DbTokenRow,
   type DbTradeRow,
   NANOS_PER_UNIT_NUMBER,
+  defaultMigrationMarketCapNano,
   nanoToNumber,
   normalizeTokenRow,
   parseNano,
 } from '@/lib/launchpad';
-import { getMarketCap, INITIAL_VIRTUAL_TOKENS, INITIAL_VIRTUAL_TON, START_MARKET_CAP_TON } from '@/lib/bondingCurve';
+import { START_MARKET_CAP_TON } from '@/lib/bondingCurve';
 
 type PeriodKey = 'hour' | 'day' | 'week' | 'month' | 'ytd' | 'all';
 type ChartPoints = { data: number[]; labels: string[] };
@@ -61,6 +62,31 @@ const PERIOD_WINDOWS_MS: Partial<Record<PeriodKey, number>> = {
 
 function candleValue(candle: DbCandleRow) {
   return nanoToNumber(parseNano(candle.close_market_cap_ton));
+}
+
+function isMigratedToken(row: DbTokenRow) {
+  return Number(row.migration_state ?? (row.migrated || row.is_migrated ? 2 : 0)) >= 2;
+}
+
+function normalizedTradeMarketCapNano(
+  row: DbTokenRow,
+  trade: DbTradeRow,
+  dexAnchorRaw: bigint | null,
+) {
+  const rawMarketCap = parseNano(trade.market_cap_ton_after);
+  if (rawMarketCap <= 0n) return { value: 0n, dexAnchorRaw };
+  if (!isMigratedToken(row)) return { value: rawMarketCap, dexAnchorRaw };
+
+  const migrationCap = parseNano(row.migration_market_cap_ton) || defaultMigrationMarketCapNano();
+  if (trade.source === 'dedust') {
+    const nextAnchor = dexAnchorRaw && dexAnchorRaw > 0n ? dexAnchorRaw : rawMarketCap;
+    return {
+      value: nextAnchor > 0n ? (migrationCap * rawMarketCap) / nextAnchor : migrationCap,
+      dexAnchorRaw: nextAnchor,
+    };
+  }
+
+  return { value: rawMarketCap > migrationCap ? migrationCap : rawMarketCap, dexAnchorRaw };
 }
 
 function addLaunchBaseline(
@@ -154,93 +180,6 @@ function sortTradesByChainTime(trades: DbTradeRow[], direction: 'asc' | 'desc' =
     .map(({ trade }) => trade);
 }
 
-function reverseTradeReserves(state: { virtualTon: bigint; virtualTokens: bigint }, trade: DbTradeRow) {
-  const type = String(trade.type || '').toLowerCase();
-  const tonAmount = parseNano(trade.ton_amount);
-  const feeTon = parseNano(trade.fee_ton);
-  const tokenAmount = parseNano(trade.token_amount);
-
-  if (type === 'sell') {
-    return {
-      virtualTon: state.virtualTon + tonAmount + feeTon,
-      virtualTokens: state.virtualTokens > tokenAmount ? state.virtualTokens - tokenAmount : state.virtualTokens,
-    };
-  }
-
-  return {
-    virtualTon: state.virtualTon > tonAmount ? state.virtualTon - tonAmount : state.virtualTon,
-    virtualTokens: state.virtualTokens + tokenAmount,
-  };
-}
-
-function applyTradeReserves(state: { virtualTon: bigint; virtualTokens: bigint }, trade: DbTradeRow) {
-  const type = String(trade.type || '').toLowerCase();
-  const tonAmount = parseNano(trade.ton_amount);
-  const feeTon = parseNano(trade.fee_ton);
-  const tokenAmount = parseNano(trade.token_amount);
-
-  if (type === 'sell') {
-    return {
-      virtualTon: state.virtualTon > tonAmount + feeTon ? state.virtualTon - tonAmount - feeTon : state.virtualTon,
-      virtualTokens: state.virtualTokens + tokenAmount,
-    };
-  }
-
-  return {
-    virtualTon: state.virtualTon + tonAmount,
-    virtualTokens: state.virtualTokens > tokenAmount ? state.virtualTokens - tokenAmount : state.virtualTokens,
-  };
-}
-
-function marketCapPoint(state: { virtualTon: bigint; virtualTokens: bigint }) {
-  if (state.virtualTon <= 0n || state.virtualTokens <= 0n) return 0;
-  return nanoToNumber(getMarketCap(state.virtualTon, state.virtualTokens));
-}
-
-function reconstructTradeChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
-  const orderedTrades = sortTradesByChainTime(trades, 'asc');
-  if (orderedTrades.length === 0) return fallbackChart(tokenMarketCapTon, createdAt);
-
-  const finalVirtualTon = parseNano(tokenRow.virtual_ton_reserves);
-  const finalVirtualTokens = parseNano(tokenRow.virtual_token_reserves);
-  let startState = {
-    virtualTon: finalVirtualTon > 0n ? finalVirtualTon : INITIAL_VIRTUAL_TON,
-    virtualTokens: finalVirtualTokens > 0n ? finalVirtualTokens : INITIAL_VIRTUAL_TOKENS,
-  };
-
-  for (const trade of [...orderedTrades].reverse()) {
-    startState = reverseTradeReserves(startState, trade);
-  }
-
-  const labels: string[] = [];
-  const data: number[] = [];
-  const firstTradeTime = tradeTime(orderedTrades[0]);
-  labels.push(createdAt || firstTradeTime || new Date().toISOString());
-  data.push(marketCapPoint(startState) || nanoToNumber(START_MARKET_CAP_TON));
-
-  let state = startState;
-  for (const trade of orderedTrades) {
-    state = applyTradeReserves(state, trade);
-    const label = tradeTime(trade);
-    if (!label) continue;
-    labels.push(label);
-    data.push(marketCapPoint(state));
-  }
-
-  const finalState = {
-    virtualTon: finalVirtualTon,
-    virtualTokens: finalVirtualTokens,
-  };
-  const finalPoint = marketCapPoint(finalState) || tokenMarketCapTon;
-  const lastPoint = data[data.length - 1] || 0;
-  if (finalPoint > 0 && Math.abs(finalPoint - lastPoint) > 0.000000001) {
-    labels.push(new Date().toISOString());
-    data.push(finalPoint);
-  }
-
-  return addLaunchBaseline({ data, labels }, tokenMarketCapTon, createdAt);
-}
-
 function cutoffForPeriod(period: PeriodKey) {
   if (period === 'all') return null;
   if (period === 'ytd') return new Date(new Date().getFullYear(), 0, 1).getTime();
@@ -270,14 +209,16 @@ function filterChartForPeriod(chart: ChartPoints, period: PeriodKey): ChartPoint
 }
 
 function tradeFallbackChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
-  const reconstructed = reconstructTradeChart(tokenRow, tokenMarketCapTon, trades, createdAt);
-  if (reconstructed.data.length > 2 || trades.length > 0) return reconstructed;
-
+  let dexAnchorRaw: bigint | null = null;
   const points = sortTradesByChainTime(trades, 'asc')
-    .map((trade) => ({
-      value: nanoToNumber(parseNano(trade.market_cap_ton_after)),
-      label: tradeTime(trade),
-    }))
+    .map((trade) => {
+      const normalized = normalizedTradeMarketCapNano(tokenRow, trade, dexAnchorRaw);
+      dexAnchorRaw = normalized.dexAnchorRaw;
+      return {
+        value: nanoToNumber(normalized.value),
+        label: tradeTime(trade),
+      };
+    })
     .filter((point) => point.value > 0 && point.label);
 
   if (points.length === 0) return fallbackChart(tokenMarketCapTon, createdAt);
@@ -290,13 +231,12 @@ function tradeFallbackChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, tra
 
 async function loadChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, trades: DbTradeRow[], createdAt?: string | null) {
   const result: Partial<Record<PeriodKey, { data: number[]; labels: string[]; label: string }>> = {};
-  const reconstructedChart = trades.length > 0
-    ? tradeFallbackChart(tokenRow, tokenMarketCapTon, trades, createdAt)
-    : null;
+  const tradeChart = tradeFallbackChart(tokenRow, tokenMarketCapTon, trades, createdAt);
+  const migrated = isMigratedToken(tokenRow);
 
   for (const [period, config] of Object.entries(PERIODS) as Array<[PeriodKey, typeof PERIODS[PeriodKey]]>) {
-    if (reconstructedChart) {
-      result[period] = { ...filterChartForPeriod(reconstructedChart, period), label: config.label };
+    if (migrated) {
+      result[period] = { ...filterChartForPeriod(tradeChart, period), label: config.label };
       continue;
     }
 
@@ -309,7 +249,7 @@ async function loadChart(tokenRow: DbTokenRow, tokenMarketCapTon: number, trades
       .limit(config.limit);
 
     if (error || !data || data.length === 0) {
-      result[period] = { ...tradeFallbackChart(tokenRow, tokenMarketCapTon, trades, createdAt), label: config.label };
+      result[period] = { ...filterChartForPeriod(tradeChart, period), label: config.label };
       continue;
     }
 
@@ -363,10 +303,22 @@ export async function GET(
   const typedTokenRow = tokenRow as unknown as DbTokenRow;
   const token = normalizeTokenRow(typedTokenRow, trades);
   const chart = await loadChart(typedTokenRow, token.marketCapTon, trades, typedTokenRow.created_at);
+  const currentMarketCap = chart.hour.data.at(-1);
+  if (isMigratedToken(typedTokenRow) && currentMarketCap && Number.isFinite(currentMarketCap)) {
+    token.marketCapTon = currentMarketCap;
+    token.priceTon = currentMarketCap / 1_000_000_000;
+  }
   const trending = ((trendingTokensData || []) as unknown as DbTokenRow[])
     .filter((item) => item.address !== address)
     .slice(0, 5)
     .map((item) => normalizeTokenRow(item));
+  let responseDexAnchorRaw: bigint | null = null;
+  const normalizedTradeMarketCaps = new Map<string, number>();
+  for (const trade of sortTradesByChainTime(trades, 'asc')) {
+    const normalized = normalizedTradeMarketCapNano(typedTokenRow, trade, responseDexAnchorRaw);
+    responseDexAnchorRaw = normalized.dexAnchorRaw;
+    if (trade.id) normalizedTradeMarketCaps.set(trade.id, nanoToNumber(normalized.value));
+  }
 
   return NextResponse.json({
     token,
@@ -379,7 +331,9 @@ export async function GET(
       tokenAmount: Number(parseNano(trade.token_amount)) / NANOS_PER_UNIT_NUMBER,
       feeTon: nanoToNumber(parseNano(trade.fee_ton)),
       feeTokenAmount: Number(parseNano(trade.fee_token_amount)) / NANOS_PER_UNIT_NUMBER,
-      marketCapTonAfter: nanoToNumber(parseNano(trade.market_cap_ton_after)),
+      marketCapTonAfter: trade.id
+        ? normalizedTradeMarketCaps.get(trade.id) ?? nanoToNumber(parseNano(trade.market_cap_ton_after))
+        : nanoToNumber(parseNano(trade.market_cap_ton_after)),
       priceTonAfter: nanoToNumber(parseNano(trade.price_ton_after)),
       trader: trade.trader_address || trade.user_address || '',
       timestamp: trade.block_time || trade.created_at || null,
