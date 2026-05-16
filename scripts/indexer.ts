@@ -58,10 +58,12 @@ const POOLS_PER_TICK = Math.max(1, Number(process.env.INDEXER_POOLS_PER_TICK || 
 const BOOTSTRAP_TOKEN_LIMIT = Math.max(50, Number(process.env.INDEXER_BOOTSTRAP_TOKEN_LIMIT || 500));
 const RPC_RETRY_ATTEMPTS = Math.max(1, Number(process.env.INDEXER_RPC_RETRY_ATTEMPTS || 3));
 const RPC_RETRY_BASE_MS = Math.max(1000, Number(process.env.INDEXER_RPC_RETRY_BASE_MS || 4000));
+const RPC_TIMEOUT_MS = Math.max(5000, Number(process.env.INDEXER_RPC_TIMEOUT_MS || 20000));
 const INDEXER_LOCK_PATH = process.env.INDEXER_LOCK_PATH || path.join(process.cwd(), 'logs', 'indexer.lock');
 const TONAPI_WEBHOOK_PORT = Number(process.env.PORT || process.env.TONAPI_WEBHOOK_PORT || 8790);
 const TONAPI_WEBHOOK_SECRET = process.env.TONAPI_WEBHOOK_SECRET || '';
 const TONAPI_WEBHOOK_ENABLED = process.env.TONAPI_WEBHOOK_ENABLED !== 'false';
+const INDEXER_RUN_ONCE = process.env.INDEXER_RUN_ONCE === 'true';
 const AUTO_SWEEP_FEES_ENABLED = process.env.AUTO_SWEEP_FEES_ENABLED === 'true';
 const AUTO_SWEEP_MIN_FEE_TOKENS = parseTokenUnits(process.env.AUTO_SWEEP_MIN_FEE_TOKENS || '1000');
 const AUTO_SWEEP_TX_VALUE = toNano(process.env.AUTO_SWEEP_TX_VALUE_TON || '0.4');
@@ -306,11 +308,16 @@ function isRetriableRpcError(error: unknown): boolean {
   return Boolean(
     maybe.isAxiosError ||
     maybe.response?.status === 429 ||
+    maybe.response?.status === 500 ||
     maybe.code === 'ECONNRESET' ||
+    maybe.code === 'ETIMEDOUT' ||
+    maybe.code === 'ECONNABORTED' ||
     message.includes('429') ||
+    message.includes('500') ||
     message.includes('EOF') ||
     message.includes('ECONNRESET') ||
-    message.includes('socket hang up'),
+    message.includes('socket hang up') ||
+    message.toLowerCase().includes('timeout'),
   );
 }
 
@@ -326,7 +333,7 @@ function logRetriable(label: string, attempt: number, delay: number, error: unkn
 async function retry<T>(label: string, fn: () => Promise<T>): Promise<T> {
   for (let attempt = 1; attempt <= RPC_RETRY_ATTEMPTS; attempt += 1) {
     try {
-      return await fn();
+      return await withTimeout(label, fn());
     } catch (error) {
       if (!isRetriableRpcError(error) || attempt === RPC_RETRY_ATTEMPTS) throw error;
       const delay = RPC_RETRY_BASE_MS * attempt;
@@ -336,6 +343,21 @@ async function retry<T>(label: string, fn: () => Promise<T>): Promise<T> {
   }
 
   throw new Error(`RPC retry exhausted: ${label}`);
+}
+
+function withTimeout<T>(label: string, promise: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`RPC timeout after ${Math.round(RPC_TIMEOUT_MS / 1000)}s on ${label}`);
+      (error as Error & { code?: string }).code = 'ETIMEDOUT';
+      reject(error);
+    }, RPC_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function selectBatch<T>(items: T[], cursor: number, count: number): { batch: T[]; nextCursor: number } {
@@ -1296,9 +1318,10 @@ async function dedustTradeAlreadyIndexed(tokenAddress: string, txLt: string, typ
   return (count || 0) > 0;
 }
 
-async function handleTokenDeployed(body: Cell) {
+async function handleTokenDeployed(body: Cell): Promise<boolean> {
   const slice = body.beginParse();
-  if (slice.loadUint(32) !== OP_TOKEN_DEPLOYED) return;
+  if (slice.remainingBits < 32) return false;
+  if (slice.loadUint(32) !== OP_TOKEN_DEPLOYED) return false;
   slice.loadUintBig(64);
   const bondingCurveAddr = slice.loadAddress();
   const jettonMasterAddr = slice.loadAddress();
@@ -1314,11 +1337,13 @@ async function handleTokenDeployed(body: Cell) {
   const existing = await getTokenRow(bcAddrStr);
   if (existing) {
     bondingCurves.set(bcAddrStr, { address: bcAddrStr });
-    await updateReserves(bcAddrStr);
-    return;
+    await updateReserves(bcAddrStr).catch((error) => {
+      console.error(`Reserve refresh failed for existing token ${bcAddrStr.slice(0, 12)}...:`, error instanceof Error ? error.message : error);
+    });
+    return true;
   }
 
-  await upsertToken({
+  const inserted = await upsertToken({
     address: bcAddrStr,
     jetton_address: jmAddrStr,
     master_address: jmAddrStr,
@@ -1341,9 +1366,13 @@ async function handleTokenDeployed(body: Cell) {
     lp_status: 'pending',
     tx_count: 0,
   }, 'token.created');
+  if (!inserted) throw new Error(`Token upsert failed for ${bcAddrStr}`);
 
   bondingCurves.set(bcAddrStr, { address: bcAddrStr });
-  await updateReserves(bcAddrStr);
+  await updateReserves(bcAddrStr).catch((error) => {
+    console.error(`Initial reserve refresh failed for ${bcAddrStr.slice(0, 12)}...:`, error instanceof Error ? error.message : error);
+  });
+  return true;
 }
 
 async function pollFactory() {
@@ -1365,18 +1394,27 @@ async function pollFactory() {
       if (lastFactoryLt && txLt <= lastFactoryLt) continue;
       const txHash = txHashHex(tx);
       if (seenTxs.has(txHash)) continue;
-      seenTxs.add(txHash);
 
+      let tokenEventFailed = false;
+      let tokenEventHandled = false;
       for (const outMsg of tx.outMessages.values()) {
         if (outMsg.body) {
           try {
-            await handleTokenDeployed(outMsg.body);
-          } catch {
-            // Not TokenDeployed.
+            tokenEventHandled = (await handleTokenDeployed(outMsg.body)) || tokenEventHandled;
+          } catch (error) {
+            tokenEventFailed = true;
+            console.error('TokenDeployed handling error:', error instanceof Error ? error.message : error);
           }
         }
       }
+      if (tokenEventFailed) {
+        throw new Error(`Factory token event handling failed at lt ${txLt.toString()}; cursor not advanced`);
+      }
+      if (tokenEventHandled) {
+        console.log(`Factory token event indexed at lt ${txLt.toString()}`);
+      }
       await saveIndexerState(stateKey, { lastLt: txLt.toString(), lastHash: txHash });
+      seenTxs.add(txHash);
     }
   } catch (error) {
     console.error('Factory poll error:', error instanceof Error ? error.message : error);
@@ -1749,6 +1787,10 @@ async function main() {
   console.log(`Auto fee sweep: ${AUTO_SWEEP_FEES_ENABLED ? 'enabled' : 'disabled'}`);
   console.log(`Live webhook: ${LIVE_EVENTS_WEBHOOK_URL || 'disabled'}`);
 
+  if (INDEXER_RUN_ONCE) {
+    await pollFactory();
+    return;
+  }
   startTonapiWebhookReceiver();
   await bootstrap();
   startPoller('factory', FACTORY_POLL_INTERVAL_MS, pollFactory);
