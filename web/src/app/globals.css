@@ -41,6 +41,16 @@
 }
 
 :root {
+  --tg-viewport-height: 100dvh;
+  --tg-safe-area-top: 0px;
+  --tg-safe-area-right: 0px;
+  --tg-safe-area-bottom: 0px;
+  --tg-safe-area-left: 0px;
+  --tg-content-safe-area-top: 0px;
+  --tg-content-safe-area-bottom: 0px;
+  --tg-bg-color: #ffffff;
+  --tg-secondary-bg-color: #ffffff;
+  --tg-bottom-bar-color: #ffffff;
   --bg-primary: #f5f5f5;
   --bg-card: #12121a;
   --bg-card-hover: #1a1a2e;
@@ -141,6 +151,28 @@ html, body {
   isolation: isolate;
 }
 
+html[data-telegram-mini-app="true"],
+html[data-telegram-mini-app="true"] body {
+  height: var(--tg-viewport-height);
+  overscroll-behavior: none;
+}
+
+html[data-telegram-mini-app="true"] body {
+  background: var(--tg-bg-color);
+}
+
+html[data-telegram-mini-app="true"] .dashboard-shell {
+  min-height: var(--tg-viewport-height);
+  padding:
+    calc(14px + var(--tg-safe-area-top))
+    calc(12px + var(--tg-safe-area-right))
+    calc(16px + var(--tg-safe-area-bottom))
+    calc(12px + var(--tg-safe-area-left));
+  background:
+    radial-gradient(circle at 50% 0%, rgba(84, 152, 230, 0.08), transparent 42%),
+    var(--shell-bg);
+}
+
 .dashboard-shell::before {
   content: "";
   position: fixed;
@@ -189,6 +221,25 @@ html, body {
   min-height: 40px;
   margin-bottom: 24px;
   gap: 18px;
+}
+
+html[data-telegram-mini-app="true"] .dashboard-topbar {
+  position: sticky;
+  top: var(--tg-content-safe-area-top);
+  z-index: 220;
+  padding: 6px 0;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--tg-secondary-bg-color) 72%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+html[data-telegram-mini-app="true"] .topbar-left {
+  width: min(820px, 100%);
+}
+
+html[data-telegram-mini-app="true"] .topbar-actions {
+  flex: 1;
+  min-width: 260px;
 }
 
 .topbar-left {
@@ -6528,11 +6579,24 @@ html, body {
     padding: 14px 10px 16px;
   }
 
+  html[data-telegram-mini-app="true"] .dashboard-shell {
+    padding:
+      calc(10px + var(--tg-safe-area-top))
+      calc(8px + var(--tg-safe-area-right))
+      calc(14px + var(--tg-safe-area-bottom))
+      calc(8px + var(--tg-safe-area-left));
+  }
+
   .dashboard-topbar {
     align-items: flex-start;
     min-height: 38px;
     margin-bottom: 16px;
     gap: 10px;
+  }
+
+  html[data-telegram-mini-app="true"] .dashboard-topbar {
+    margin-bottom: 10px;
+    padding: 6px 0 8px;
   }
 
   .topbar-left {
@@ -6551,6 +6615,11 @@ html, body {
     width: 100%;
     justify-content: flex-end;
     gap: 8px;
+  }
+
+  html[data-telegram-mini-app="true"] .topbar-actions {
+    justify-content: space-between;
+    min-width: 0;
   }
 
   .dashboard-nav-pill {
@@ -6614,9 +6683,25 @@ html, body {
     display: none;
   }
 
+  html[data-telegram-mini-app="true"] .topbar-search-shell,
+  html[data-telegram-mini-app="true"] .topbar-search-shell.is-open,
+  html[data-telegram-mini-app="true"] .topbar-search-shell:focus-within {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+
+  html[data-telegram-mini-app="true"] .dashboard-search {
+    width: 100%;
+  }
+
   .topbar-slash {
     font-size: 14px;
     margin: 0 -3px;
+  }
+
+  html[data-telegram-mini-app="true"] .topbar-slash {
+    display: none;
   }
 
   .notification-button {

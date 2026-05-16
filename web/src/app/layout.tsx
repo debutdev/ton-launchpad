@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "@coinbase/cds-icons/fonts/web/icon-font.css";
 import "@coinbase/cds-web/globalStyles";
 import "./globals.css";
@@ -7,13 +7,35 @@ import { Providers } from "./providers";
 export const metadata: Metadata = {
   title: "Tonked.io - Memecoin Launchpad on TON",
   description: "Launch and trade memecoins on TON blockchain via Telegram",
+  applicationName: "Tonked.io",
+  appleWebApp: {
+    capable: true,
+    title: "Tonked.io",
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
 };
 
 const themeInitializer = `
 (() => {
   try {
+    const isTelegram = location.search.includes('tgWebAppData') || Boolean(window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData);
+    if (isTelegram) {
+      document.documentElement.dataset.telegramMiniApp = 'true';
+    }
     const storedTheme = window.localStorage.getItem('tonked-theme');
-    const theme = storedTheme === 'dark' || storedTheme === 'light'
+    const telegramTheme = isTelegram && window.Telegram && window.Telegram.WebApp
+      ? window.Telegram.WebApp.colorScheme
+      : null;
+    const theme = telegramTheme === 'dark' || telegramTheme === 'light'
+      ? telegramTheme
+      : storedTheme === 'dark' || storedTheme === 'light'
       ? storedTheme
       : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     document.documentElement.dataset.theme = theme;
