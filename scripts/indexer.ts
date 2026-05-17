@@ -257,13 +257,14 @@ function txTime(tx: { now?: number }): string {
   return new Date(Number(tx.now || Math.floor(Date.now() / 1000)) * 1000).toISOString();
 }
 
-function parseMintedAmount(body: Cell | null | undefined): bigint {
+function parseMintedAmount(body: Cell | null | undefined, expectedReceiver?: Address): bigint {
   if (!body) return 0n;
   try {
     const slice = body.beginParse();
     if (slice.loadUint(32) !== OP_MINT) return 0n;
     slice.loadUintBig(64);
-    slice.loadAddress();
+    const receiver = slice.loadAddress();
+    if (expectedReceiver && !receiver.equals(expectedReceiver)) return 0n;
     const transfer = slice.loadRef().beginParse();
     if (transfer.loadUint(32) !== OP_JETTON_TRANSFER_INTERNAL) return 0n;
     transfer.loadUintBig(64);
@@ -1450,8 +1451,12 @@ async function pollBondingCurves() {
           if (op === OP_BUY_TOKENS) {
             const attachedTon = inMsg.info.type === 'internal' ? inMsg.info.value.coins : 0n;
             const tonAmount = inferBuyAmount(attachedTon);
-            const userAddr = inMsg.info.type === 'internal' ? inMsg.info.src.toString() : 'unknown';
-            const mintedAmount = Array.from(tx.outMessages.values()).reduce((sum, outMsg) => sum + parseMintedAmount(outMsg.body), 0n);
+            const userAddress = inMsg.info.type === 'internal' ? inMsg.info.src : null;
+            const userAddr = userAddress ? userAddress.toString() : 'unknown';
+            const mintedAmount = Array.from(tx.outMessages.values()).reduce(
+              (sum, outMsg) => sum + parseMintedAmount(outMsg.body, userAddress || undefined),
+              0n,
+            );
             if (mintedAmount <= 0n) continue;
             const reserves = deriveBondingTradeSnapshot(before, 'buy', tonAmount, mintedAmount);
             await updateTokenFromTradeSnapshot(addr, reserves);
@@ -1759,7 +1764,7 @@ async function bootstrap() {
 
   for (const token of (data || []) as Array<TokenRow & { migrated?: boolean; is_migrated?: boolean }>) {
     if (!token.address) continue;
-    if (Number(token.migration_state || 0) < 2 && !token.migrated && !token.is_migrated) {
+    if (INDEXER_RUN_ONCE || (Number(token.migration_state || 0) < 2 && !token.migrated && !token.is_migrated)) {
       const reserves = await updateReserves(token.address);
       if (reserves) bondingCurves.set(token.address, { address: token.address });
       await sleep(250);
@@ -1789,6 +1794,10 @@ async function main() {
 
   if (INDEXER_RUN_ONCE) {
     await pollFactory();
+    await bootstrap();
+    await pollBondingCurves();
+    await pollDedustPools();
+    await pollFeeAutoSweeps();
     return;
   }
   startTonapiWebhookReceiver();

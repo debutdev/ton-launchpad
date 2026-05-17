@@ -4,7 +4,8 @@ import { mnemonicToWalletKey } from '@ton/crypto';
 import { Asset, Factory, Pool, PoolType, ReadinessStatus } from '@dedust/sdk';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
-import { buyTokensBody, jettonTransferBody } from '../wrappers/acton/LaunchpadActon';
+import { buyTokensBody, jettonTransferBody, sellForwardPayload } from '../wrappers/acton/LaunchpadActon';
+import { getBuyQuote as getLocalBuyQuote, getMarketCap } from '../lib/bondingCurve';
 
 dotenv.config();
 
@@ -15,6 +16,8 @@ const OP_DEDUST_JETTON_SWAP = 0xe3a0d482;
 const OP_DEDUST_NATIVE_SWAP = 0xea06185d;
 const TEST11_SYMBOL = 'TEST11';
 const TEST11_NAME = 'test11';
+const NORMAL_BUY_GAS = toNano('0.1');
+const MIGRATION_BUY_GAS = toNano('1.2');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -155,6 +158,34 @@ async function waitForIndexedDedustTrade(
   throw new Error(`Timed out waiting for indexed attributed DeDust ${type}`);
 }
 
+async function waitForIndexedTrade(
+  supabase: SupabaseClient,
+  curve: Address,
+  source: 'bonding_curve' | 'dedust',
+  type: 'buy' | 'sell',
+  wallet: Address,
+  sinceIso: string,
+): Promise<any> {
+  const curveAddress = curve.toString();
+  const walletAddress = wallet.toString();
+  for (let attempt = 1; attempt <= 60; attempt += 1) {
+    const { data, error } = await supabase
+      .from('trades')
+      .select('tx_hash, trader_address, user_address, ton_amount, token_amount, fee_ton, fee_token_amount, block_time, created_at')
+      .eq('token_address', curveAddress)
+      .eq('source', source)
+      .eq('type', type)
+      .gte('created_at', sinceIso)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (error) throw new Error(`Supabase ${source} trade query failed: ${error.message}`);
+    const attributed = (data || []).find((trade: any) => trade.trader_address === walletAddress || trade.user_address === walletAddress);
+    if (attributed) return attributed;
+    await sleep(3000);
+  }
+  throw new Error(`Timed out waiting for indexed attributed ${source} ${type}`);
+}
+
 async function waitForCandles(supabase: SupabaseClient, curve: Address): Promise<void> {
   for (let attempt = 1; attempt <= 40; attempt += 1) {
     const { count, error } = await supabase
@@ -260,6 +291,76 @@ async function migrationState(client: TonClient, curve: Address): Promise<number
   return Number(result.stack.readBigNumber());
 }
 
+async function getReserves(client: TonClient, curve: Address) {
+  const result = await retry('getReserves', () => client.runMethod(curve, 'getReserves'));
+  const stack = result.stack;
+  return {
+    virtualTonReserves: stack.readBigNumber(),
+    virtualTokenReserves: stack.readBigNumber(),
+    realTonReserves: stack.readBigNumber(),
+    realTokenReserves: stack.readBigNumber(),
+    currentSupply: stack.readBigNumber(),
+    migrationState: Number(stack.readBigNumber()),
+  };
+}
+
+async function getCurveBuyQuote(client: TonClient, curve: Address, tonIn: bigint) {
+  const result = await retry('getBuyQuote', () =>
+    client.runMethod(curve, 'getBuyQuote', [{ type: 'int', value: tonIn }]),
+  );
+  return {
+    amountOut: result.stack.readBigNumber(),
+    fee: result.stack.readBigNumber(),
+  };
+}
+
+async function getCurveSellQuote(client: TonClient, curve: Address, tokensIn: bigint) {
+  const result = await retry('getSellQuote', () =>
+    client.runMethod(curve, 'getSellQuote', [{ type: 'int', value: tokensIn }]),
+  );
+  return {
+    amountOut: result.stack.readBigNumber(),
+    fee: result.stack.readBigNumber(),
+  };
+}
+
+async function getCurveMarketData(client: TonClient, curve: Address) {
+  const result = await retry('getMarketData', () => client.runMethod(curve, 'getMarketData'));
+  return {
+    price: result.stack.readBigNumber(),
+    marketCapTon: result.stack.readBigNumber(),
+    migrationMarketCapTon: result.stack.readBigNumber(),
+    progressBps: result.stack.readBigNumber(),
+  };
+}
+
+function findMigrationBuyAmount(reserves: Awaited<ReturnType<typeof getReserves>>, threshold: bigint): bigint {
+  const current = getMarketCap(reserves.virtualTonReserves, reserves.virtualTokenReserves);
+  if (current >= threshold) return toNano('0.001');
+
+  let low = 1n;
+  let high = toNano('0.01');
+  while (true) {
+    const quote = getLocalBuyQuote(high, reserves.virtualTonReserves, reserves.virtualTokenReserves);
+    const postMarketCap = getMarketCap(quote.newVirtualTonReserves, quote.newVirtualTokenReserves);
+    if (postMarketCap >= threshold) break;
+    high *= 2n;
+    if (high > toNano('2')) {
+      throw new Error(`Migration buy would need more than 2 TON economic input; refusing`);
+    }
+  }
+
+  while (low < high) {
+    const mid = (low + high) / 2n;
+    const quote = getLocalBuyQuote(mid, reserves.virtualTonReserves, reserves.virtualTokenReserves);
+    const postMarketCap = getMarketCap(quote.newVirtualTonReserves, quote.newVirtualTokenReserves);
+    if (postMarketCap >= threshold) high = mid;
+    else low = mid + 1n;
+  }
+
+  return high + toNano('0.002');
+}
+
 async function waitForMigration(client: TonClient, curve: Address): Promise<number> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const state = await migrationState(client, curve);
@@ -269,7 +370,7 @@ async function waitForMigration(client: TonClient, curve: Address): Promise<numb
   return migrationState(client, curve);
 }
 
-async function uploadMetadata(queryId: bigint): Promise<string> {
+async function uploadMetadata(queryId: bigint, name: string, symbol: string): Promise<string> {
   const apiKey = process.env.PINATA_API_KEY?.replace(/^"|"$/g, '');
   const apiSecret = process.env.PINATA_API_SECRET?.replace(/^"|"$/g, '');
   if (!apiKey || !apiSecret) {
@@ -285,13 +386,13 @@ async function uploadMetadata(queryId: bigint): Promise<string> {
     },
     body: JSON.stringify({
       pinataContent: {
-        name: TEST11_NAME,
-        symbol: TEST11_SYMBOL,
-        description: 'test11 DeDust migration cycle test token',
+        name,
+        symbol,
+        description: `${name} DeDust full-cycle test token`,
         image: '',
         decimals: 9,
       },
-      pinataMetadata: { name: `${TEST11_SYMBOL}_${queryId}_metadata` },
+      pinataMetadata: { name: `${symbol}_${queryId}_metadata` },
     }),
   });
 
@@ -440,9 +541,29 @@ function dedustJettonSwapPayload(args: { pool: Address; minOut: bigint; recipien
 
 async function main() {
   const execute = hasFlag('--execute') && !hasFlag('--dry-run');
-  const maxSpend = toNano(argValue('--max-spend-ton') || '3.5');
+  const tokenName = argValue('--name') || TEST11_NAME;
+  const tokenSymbol = (argValue('--symbol') || TEST11_SYMBOL).toUpperCase();
+  const resumeCurve = argValue('--curve');
+  const resumeMaster = argValue('--master');
+  const waitForIndexerDuringRun = !hasFlag('--skip-index-waits');
+  const skipCurveTrades = hasFlag('--skip-curve-trades');
+  const skipDedustConfig = hasFlag('--skip-dedust-config');
+  const maxSpend = toNano(argValue('--max-spend-ton') || '4');
   const minRemaining = toNano(argValue('--min-remaining-ton') || process.env.TESTNET_MIN_REMAINING_TON || '2');
-  const plannedCap = toNano('0.7') + toNano('0.05') + toNano('1.8') + toNano('0.3') + toNano('0.4');
+  const curveBuyAmount = toNano(argValue('--curve-buy-ton') || '0.05');
+  const dexBuyAmount = toNano(argValue('--dex-buy-ton') || '0.01');
+  let plannedCap = 0n;
+  if (!resumeCurve || !resumeMaster) plannedCap += toNano('0.7');
+  if (!skipCurveTrades) {
+    plannedCap += curveBuyAmount + NORMAL_BUY_GAS;
+    plannedCap += toNano('0.3');
+    plannedCap += curveBuyAmount + NORMAL_BUY_GAS;
+  }
+  if (!skipDedustConfig) plannedCap += toNano('0.05');
+  plannedCap += toNano('1.9');
+  plannedCap += toNano('0.35');
+  plannedCap += dexBuyAmount + toNano('0.2');
+  plannedCap += toNano('0.35');
 
   if (plannedCap > maxSpend) {
     throw new Error(`Planned cap ${formatTon(plannedCap)} TON exceeds max spend ${formatTon(maxSpend)} TON`);
@@ -472,6 +593,7 @@ async function main() {
   console.log(`Wallet: ${wallet.address.toString({ testOnly: true })}`);
   console.log(`Balance before: ${formatTon(balanceBefore)} TON`);
   console.log(`Factory: ${factory.toString({ testOnly: true })}`);
+  console.log(`Token under test: ${tokenName}/${tokenSymbol}`);
   console.log(`Planned outgoing cap: ${formatTon(plannedCap)} TON`);
   if (!execute) {
     console.log('Dry run only. Add --execute to send testnet transactions.');
@@ -482,19 +604,28 @@ async function main() {
   if (factoryState.state !== 'active') throw new Error(`Factory is not active: ${factoryState.state}`);
 
   const queryId = BigInt(Date.now());
-  const metadataUrl = await uploadMetadata(queryId);
-  console.log(`Metadata: ${metadataUrl}`);
-  console.log(`Launching ${TEST11_NAME}/${TEST11_SYMBOL}...`);
-  await sendOne({
-    wallet: openedWallet,
-    secretKey: key.secretKey,
-    to: factory,
-    value: toNano('0.7'),
-    body: deployTokenBody(queryId, metadataUrl),
-    bounce: true,
-  });
+  let token: TokenAddresses;
+  if (resumeCurve && resumeMaster) {
+    token = {
+      curve: Address.parse(resumeCurve),
+      master: Address.parse(resumeMaster),
+    };
+    console.log('Resuming existing launched token.');
+  } else {
+    const metadataUrl = await uploadMetadata(queryId, tokenName, tokenSymbol);
+    console.log(`Metadata: ${metadataUrl}`);
+    console.log(`Launching ${tokenName}/${tokenSymbol}...`);
+    await sendOne({
+      wallet: openedWallet,
+      secretKey: key.secretKey,
+      to: factory,
+      value: toNano('0.7'),
+      body: deployTokenBody(queryId, metadataUrl),
+      bounce: true,
+    });
 
-  const token = await findTokenDeployed(client, factory, queryId);
+    token = await findTokenDeployed(client, factory, queryId);
+  }
   console.log(`Curve: ${token.curve.toString({ testOnly: true })}`);
   console.log(`Jetton master: ${token.master.toString({ testOnly: true })}`);
   console.log('Waiting for indexer to insert token...');
@@ -502,6 +633,96 @@ async function main() {
 
   const userJettonWallet = await walletAddress(client, token.master, wallet.address);
   const platformJettonWallet = await walletAddress(client, token.master, platform);
+
+  if (!skipCurveTrades) {
+    console.log('Bonding-curve buy #1...');
+    const curveBuy1StartedAt = new Date(Date.now() - 5000).toISOString();
+    const beforeCurveBuy1 = await jettonBalance(client, userJettonWallet);
+    const curveBuy1Quote = await getCurveBuyQuote(client, token.curve, curveBuyAmount);
+    await sendOne({
+      wallet: openedWallet,
+      secretKey: key.secretKey,
+      to: token.curve,
+      value: curveBuyAmount + NORMAL_BUY_GAS,
+      body: buyTokensBody(queryId + 1n),
+      bounce: true,
+    });
+    await sleep(20000);
+    const afterCurveBuy1 = await jettonBalance(client, userJettonWallet);
+    const curveBuy1Delta = afterCurveBuy1 - beforeCurveBuy1;
+    console.log(`Curve buy #1 received: ${formatTokens(curveBuy1Delta)} ${tokenSymbol}`);
+    console.log(`Curve buy #1 quoted: ${formatTokens(curveBuy1Quote.amountOut)} ${tokenSymbol}`);
+    if (curveBuy1Delta < curveBuy1Quote.amountOut) {
+      throw new Error('Bonding-curve buy #1 minted fewer tokens than quoted');
+    }
+    if (waitForIndexerDuringRun) {
+      await waitForIndexedTrade(supabase, token.curve, 'bonding_curve', 'buy', wallet.address, curveBuy1StartedAt);
+    }
+
+    console.log('Bonding-curve sell...');
+    const curveSellStartedAt = new Date(Date.now() - 5000).toISOString();
+    const curveSellAmount = afterCurveBuy1 / 4n;
+    if (curveSellAmount <= 0n) throw new Error('No tokens available for bonding-curve sell test');
+    const curveSellQuote = await getCurveSellQuote(client, token.curve, curveSellAmount);
+    const platformTonBeforeCurveSell = await retry('getBalance(platform)', () => client.getBalance(platform));
+    await sendOne({
+      wallet: openedWallet,
+      secretKey: key.secretKey,
+      to: userJettonWallet,
+      value: toNano('0.3'),
+      body: jettonTransferBody({
+        queryId: queryId + 2n,
+        amount: curveSellAmount,
+        destination: token.curve,
+        responseDestination: wallet.address,
+        forwardTonAmount: toNano('0.15'),
+        forwardPayload: sellForwardPayload(queryId + 2n, 0n),
+      }),
+      bounce: true,
+    });
+    await sleep(25000);
+    const afterCurveSell = await jettonBalance(client, userJettonWallet);
+    const platformTonAfterCurveSell = await retry('getBalance(platform)', () => client.getBalance(platform));
+    const curvePlatformFeeDelta = platformTonAfterCurveSell - platformTonBeforeCurveSell;
+    console.log(`Curve sell amount: ${formatTokens(curveSellAmount)} ${tokenSymbol}`);
+    console.log(`Curve sell TON out quoted: ${formatTon(curveSellQuote.amountOut)} TON`);
+    console.log(`Curve sell platform TON fee quoted: ${formatTon(curveSellQuote.fee)} TON`);
+    console.log(`Curve sell platform TON fee delta: ${formatTon(curvePlatformFeeDelta)} TON`);
+    if (afterCurveSell > afterCurveBuy1 - curveSellAmount) {
+      throw new Error('Bonding-curve sell did not debit user tokens as expected');
+    }
+    if (curvePlatformFeeDelta < curveSellQuote.fee) {
+      throw new Error('Bonding-curve platform TON fee was below quoted 2% fee');
+    }
+    if (waitForIndexerDuringRun) {
+      await waitForIndexedTrade(supabase, token.curve, 'bonding_curve', 'sell', wallet.address, curveSellStartedAt);
+    }
+
+    console.log('Bonding-curve buy #2...');
+    const curveBuy2StartedAt = new Date(Date.now() - 5000).toISOString();
+    const beforeCurveBuy2 = await jettonBalance(client, userJettonWallet);
+    const curveBuy2Quote = await getCurveBuyQuote(client, token.curve, curveBuyAmount);
+    await sendOne({
+      wallet: openedWallet,
+      secretKey: key.secretKey,
+      to: token.curve,
+      value: curveBuyAmount + NORMAL_BUY_GAS,
+      body: buyTokensBody(queryId + 3n),
+      bounce: true,
+    });
+    await sleep(20000);
+    const afterCurveBuy2 = await jettonBalance(client, userJettonWallet);
+    const curveBuy2Delta = afterCurveBuy2 - beforeCurveBuy2;
+    console.log(`Curve buy #2 received: ${formatTokens(curveBuy2Delta)} ${tokenSymbol}`);
+    console.log(`Curve buy #2 quoted: ${formatTokens(curveBuy2Quote.amountOut)} ${tokenSymbol}`);
+    if (curveBuy2Delta < curveBuy2Quote.amountOut) {
+      throw new Error('Bonding-curve buy #2 minted fewer tokens than quoted');
+    }
+    if (waitForIndexerDuringRun) {
+      await waitForIndexedTrade(supabase, token.curve, 'bonding_curve', 'buy', wallet.address, curveBuy2StartedAt);
+    }
+  }
+
   const dedust = await ensureDedustContracts({
     client,
     wallet: openedWallet,
@@ -510,16 +731,27 @@ async function main() {
     jettonMaster: token.master,
   });
 
-  console.log('Configuring DeDust migration on curve...');
-  await configureDedust({ wallet: openedWallet, secretKey: key.secretKey, curve: token.curve, dedust });
+  if (!skipDedustConfig) {
+    console.log('Configuring DeDust migration on curve...');
+    await configureDedust({ wallet: openedWallet, secretKey: key.secretKey, curve: token.curve, dedust });
+  }
 
   console.log('Buying enough to trigger migration...');
+  const marketDataBeforeMigration = await getCurveMarketData(client, token.curve);
+  const reservesBeforeMigration = await getReserves(client, token.curve);
+  const migrationBuyAmount = findMigrationBuyAmount(reservesBeforeMigration, marketDataBeforeMigration.migrationMarketCapTon);
+  const migrationAttachValue = migrationBuyAmount + MIGRATION_BUY_GAS;
+  if (migrationAttachValue > toNano('1.9')) {
+    throw new Error(`Migration attach value ${formatTon(migrationAttachValue)} TON exceeds the 1.9 TON test cap`);
+  }
+  console.log(`Migration economic buy amount: ${formatTon(migrationBuyAmount)} TON`);
+  console.log(`Migration attached value: ${formatTon(migrationAttachValue)} TON`);
   await sendOne({
     wallet: openedWallet,
     secretKey: key.secretKey,
     to: token.curve,
-    value: toNano('1.8'),
-    body: buyTokensBody(queryId + 1n),
+    value: migrationAttachValue,
+    body: buyTokensBody(queryId + 4n),
     bounce: true,
   });
 
@@ -534,24 +766,71 @@ async function main() {
     throw new Error(`DeDust pool is not ready after migration: ${readiness}`);
   }
   console.log('Waiting for indexer to register migrated pool...');
-  await waitForIndexedMigration(supabase, token.curve, dedust.pool);
-  await waitForIndexedPoolCursor(supabase, dedust.pool);
+  if (waitForIndexerDuringRun) {
+    await waitForIndexedMigration(supabase, token.curve, dedust.pool);
+    await waitForIndexedPoolCursor(supabase, dedust.pool);
+  }
 
   const migratedTokenBalance = await jettonBalance(client, userJettonWallet);
-  console.log(`User token balance after migration buy: ${formatTokens(migratedTokenBalance)} ${TEST11_SYMBOL}`);
+  console.log(`User token balance after migration buy: ${formatTokens(migratedTokenBalance)} ${tokenSymbol}`);
+
+  async function sellMigrated(label: string, swapAmount: bigint, queryOffset: bigint): Promise<void> {
+    console.log(`${label}: selling migrated token through DeDust...`);
+    const dexSellStartedAt = new Date(Date.now() - 5000).toISOString();
+    const platformBefore = await jettonBalance(client, platformJettonWallet);
+    const userBefore = await jettonBalance(client, userJettonWallet);
+    const expectedFeeTokens = (swapAmount * 2n) / 100n;
+    if (swapAmount <= 0n) throw new Error(`No tokens available for ${label}`);
+    if (userBefore < swapAmount) throw new Error(`${label} amount exceeds user balance`);
+    await sendOne({
+      wallet: openedWallet,
+      secretKey: key.secretKey,
+      to: userJettonWallet,
+      value: toNano('0.35'),
+      body: jettonTransferBody({
+        queryId: queryId + queryOffset,
+        amount: swapAmount,
+        destination: dedust.jettonVault,
+        responseDestination: wallet.address,
+        forwardTonAmount: toNano('0.2'),
+        forwardPayload: dedustJettonSwapPayload({
+          pool: dedust.pool,
+          minOut: 0n,
+          recipient: wallet.address,
+        }),
+        forwardPayloadByRef: true,
+      }),
+      bounce: true,
+    });
+    await sleep(25000);
+    const platformAfter = await jettonBalance(client, platformJettonWallet);
+    const platformDelta = platformAfter - platformBefore;
+    const userAfter = await jettonBalance(client, userJettonWallet);
+    console.log(`${label} amount: ${formatTokens(swapAmount)} ${tokenSymbol}`);
+    console.log(`${label} user token delta: ${formatTokens(userBefore - userAfter)} ${tokenSymbol}`);
+    console.log(`${label} platform fee token delta: ${formatTokens(platformDelta)} ${tokenSymbol}`);
+    console.log(`${label} expected 2% token fee: ${formatTokens(expectedFeeTokens)} ${tokenSymbol}`);
+    if (platformDelta < expectedFeeTokens) {
+      throw new Error(`${label} platform fee token delta was below expected 2% sell tax`);
+    }
+    if (waitForIndexerDuringRun) {
+      await waitForIndexedTrade(supabase, token.curve, 'dedust', 'sell', wallet.address, dexSellStartedAt);
+    }
+  }
+
+  await sellMigrated('Migrated sell #1', migratedTokenBalance / 20n, 5n);
 
   console.log('Buying migrated token through DeDust...');
   const dexBuyStartedAt = new Date(Date.now() - 5000).toISOString();
   const beforeDexBuyBalance = await jettonBalance(client, userJettonWallet);
-  const buyAmount = toNano('0.02');
   await sendOne({
     wallet: openedWallet,
     secretKey: key.secretKey,
     to: dedust.nativeVault,
-    value: buyAmount + toNano('0.25'),
+    value: dexBuyAmount + toNano('0.2'),
     body: dedustNativeSwapBody({
-      queryId: queryId + 2n,
-      amount: buyAmount,
+      queryId: queryId + 6n,
+      amount: dexBuyAmount,
       pool: dedust.pool,
       minOut: 1n,
       recipient: wallet.address,
@@ -560,54 +839,26 @@ async function main() {
   });
   await sleep(25000);
   const afterDexBuyBalance = await jettonBalance(client, userJettonWallet);
-  console.log(`User token balance before DeDust buy: ${formatTokens(beforeDexBuyBalance)}`);
-  console.log(`User token balance after DeDust buy: ${formatTokens(afterDexBuyBalance)}`);
+  console.log(`User token balance before DeDust buy: ${formatTokens(beforeDexBuyBalance)} ${tokenSymbol}`);
+  console.log(`User token balance after DeDust buy: ${formatTokens(afterDexBuyBalance)} ${tokenSymbol}`);
   if (afterDexBuyBalance <= beforeDexBuyBalance) throw new Error('Migrated DeDust buy did not increase token balance');
-  await waitForIndexedDedustTrade(supabase, token.curve, 'buy', wallet.address, dexBuyStartedAt);
-
-  console.log('Selling migrated token through DeDust...');
-  const dexSellStartedAt = new Date(Date.now() - 5000).toISOString();
-  const platformBefore = await jettonBalance(client, platformJettonWallet);
-  const swapAmount = afterDexBuyBalance / 10n;
-  const expectedFeeTokens = (swapAmount * 2n) / 100n;
-  if (swapAmount <= 0n) throw new Error('No tokens available for migrated sell test');
-  await sendOne({
-    wallet: openedWallet,
-    secretKey: key.secretKey,
-    to: userJettonWallet,
-    value: toNano('0.4'),
-    body: jettonTransferBody({
-      queryId: queryId + 3n,
-      amount: swapAmount,
-      destination: dedust.jettonVault,
-      responseDestination: wallet.address,
-      forwardTonAmount: toNano('0.25'),
-      forwardPayload: dedustJettonSwapPayload({
-        pool: dedust.pool,
-        minOut: 0n,
-        recipient: wallet.address,
-      }),
-      forwardPayloadByRef: true,
-    }),
-    bounce: true,
-  });
-  await sleep(25000);
-  const platformAfter = await jettonBalance(client, platformJettonWallet);
-  const platformDelta = platformAfter - platformBefore;
-  console.log(`Platform fee tokens before migrated sell: ${formatTokens(platformBefore)} ${TEST11_SYMBOL}`);
-  console.log(`Platform fee tokens after migrated sell: ${formatTokens(platformAfter)} ${TEST11_SYMBOL}`);
-  console.log(`Platform fee token delta: ${formatTokens(platformDelta)} ${TEST11_SYMBOL}`);
-  console.log(`Expected fee token delta: ${formatTokens(expectedFeeTokens)} ${TEST11_SYMBOL}`);
-  if (platformDelta < expectedFeeTokens) {
-    throw new Error('Platform fee token delta was below expected 2% sell tax');
+  if (waitForIndexerDuringRun) {
+    await waitForIndexedTrade(supabase, token.curve, 'dedust', 'buy', wallet.address, dexBuyStartedAt);
   }
-  await waitForIndexedDedustTrade(supabase, token.curve, 'sell', wallet.address, dexSellStartedAt);
-  await waitForCandles(supabase, token.curve);
+
+  await sellMigrated('Migrated sell #2', afterDexBuyBalance / 20n, 7n);
+
+  const platformAfterAll = await jettonBalance(client, platformJettonWallet);
+  console.log(`Platform fee token balance after migrated sells: ${formatTokens(platformAfterAll)} ${tokenSymbol}`);
+
+  if (waitForIndexerDuringRun) {
+    await waitForCandles(supabase, token.curve);
+  }
 
   const balanceAfter = await retry('getBalance(wallet)', () => client.getBalance(wallet.address));
   console.log(`Balance after: ${formatTon(balanceAfter)} TON`);
   console.log(`Actual wallet balance delta: ${formatTon(balanceBefore - balanceAfter)} TON`);
-  console.log('test11 DeDust migration cycle completed successfully.');
+  console.log(`${tokenName} DeDust full migration cycle completed successfully.`);
 }
 
 main().catch((error) => {
