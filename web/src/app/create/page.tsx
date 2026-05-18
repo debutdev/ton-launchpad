@@ -72,6 +72,27 @@ async function findIndexedToken(
   return typeof match?.address === 'string' ? match.address : null;
 }
 
+async function syncLaunchIndex(
+  metadataUrl: string,
+  creatorAddress: string,
+  earliestTimestampMs: number,
+): Promise<string | null> {
+  const response = await fetch('/api/indexer/sync-launch', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    cache: 'no-store',
+    body: JSON.stringify({
+      metadataUrl,
+      creatorAddress,
+      submittedAt: earliestTimestampMs,
+    }),
+  }).catch(() => null);
+
+  if (!response?.ok) return null;
+  const data = await response.json().catch(() => null) as { address?: string } | null;
+  return typeof data?.address === 'string' ? data.address : null;
+}
+
 function waitForIndexedToken(
   metadataUrl: string,
   creatorAddress: string,
@@ -79,6 +100,7 @@ function waitForIndexedToken(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let syncInFlight = false;
     let channel: ReturnType<typeof supabase.channel> | null = null;
     const timers: number[] = [];
 
@@ -96,6 +118,14 @@ function waitForIndexedToken(
 
     const checkNow = async () => {
       const address = await findIndexedToken(metadataUrl, creatorAddress, earliestTimestampMs);
+      if (address) resolveOnce(address);
+    };
+
+    const syncNow = async () => {
+      if (settled || syncInFlight) return;
+      syncInFlight = true;
+      const address = await syncLaunchIndex(metadataUrl, creatorAddress, earliestTimestampMs);
+      syncInFlight = false;
       if (address) resolveOnce(address);
     };
 
@@ -124,12 +154,14 @@ function waitForIndexedToken(
       });
 
     timers.push(window.setInterval(() => void checkNow(), 2_500));
+    timers.push(window.setInterval(() => void syncNow(), 7_500));
     timers.push(window.setTimeout(() => {
       if (settled) return;
       cleanup();
       reject(new Error('The launch was sent, but the token is still indexing.'));
     }, 45_000));
     void checkNow();
+    window.setTimeout(() => void syncNow(), 4_000);
   });
 }
 
