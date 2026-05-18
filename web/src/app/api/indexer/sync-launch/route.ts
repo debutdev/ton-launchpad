@@ -29,7 +29,8 @@ type TokenMetadata = {
 };
 
 function clean(value: string | undefined) {
-  return (value || '').replace(/[\r\n\t]/g, '').trim();
+  const sanitized = (value || '').replace(/[\r\n\t]/g, '').trim();
+  return sanitized.replace(/^(['"])(.*)\1$/, '$2').trim();
 }
 
 function ipfsToGateway(url: string) {
