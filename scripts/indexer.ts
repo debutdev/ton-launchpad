@@ -56,10 +56,10 @@ const FACTORY_ADDRESS =
   process.env.ACTON_FACTORY_ADDRESS ||
   CURRENT_FACTORY_ADDRESS ||
   (IS_TESTNET ? process.env.ACTON_TESTNET_FACTORY_ADDRESS || CURRENT_ACTON_TESTNET_FACTORY_ADDRESS : '');
-if (!FACTORY_ADDRESS) {
-  throw new Error('Set NEXT_PUBLIC_FACTORY_ADDRESS to the active launchpad factory for this network');
-}
-requireNetworkAddress(FACTORY_ADDRESS, 'NEXT_PUBLIC_FACTORY_ADDRESS');
+const INDEXER_DISABLED_REASON = FACTORY_ADDRESS
+  ? ''
+  : 'Set NEXT_PUBLIC_FACTORY_ADDRESS to the active launchpad factory for this network';
+if (FACTORY_ADDRESS) requireNetworkAddress(FACTORY_ADDRESS, 'NEXT_PUBLIC_FACTORY_ADDRESS');
 const PLATFORM_WALLET_ADDRESS =
   process.env.PLATFORM_WALLET ||
   process.env.NEXT_PUBLIC_PLATFORM_WALLET ||
@@ -764,7 +764,13 @@ function startTonapiWebhookReceiver() {
 
     if (request.method === 'GET' && url.pathname === '/health') {
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, factory: FACTORY_ADDRESS }));
+      response.end(JSON.stringify({
+        ok: true,
+        network: IS_TESTNET ? 'testnet' : 'mainnet',
+        factory: FACTORY_ADDRESS || null,
+        disabled: Boolean(INDEXER_DISABLED_REASON),
+        reason: INDEXER_DISABLED_REASON || null,
+      }));
       return;
     }
 
@@ -1811,6 +1817,11 @@ async function bootstrap() {
 async function main() {
   acquireIndexerLock();
   console.log('Tonked indexer');
+  if (INDEXER_DISABLED_REASON) {
+    console.warn(`Indexer disabled: ${INDEXER_DISABLED_REASON}`);
+    startTonapiWebhookReceiver();
+    return;
+  }
   console.log(`Factory: ${FACTORY_ADDRESS}`);
   console.log(`Factory polling: ${FACTORY_POLL_INTERVAL_MS}ms`);
   console.log(`Curve polling: ${CURVE_POLL_INTERVAL_MS}ms, ${CURVES_PER_TICK} curve(s) per tick`);
