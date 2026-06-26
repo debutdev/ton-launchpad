@@ -178,7 +178,7 @@ type FactoryAllowedMessage =
     | UpdateFactoryMigrationMarketCap
 
 contract LaunchpadFactory {
-    author: "Instatgram"
+    author: "Instantgram"
     version: "0.1.0"
     description: "Factory for launchpad bonding curves and custom fee Jettons"
     storage: FactoryStorage

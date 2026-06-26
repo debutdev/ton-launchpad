@@ -274,7 +274,7 @@ export default function CreateToken() {
     <main className="dashboard-shell">
       <div className="dashboard-topbar">
         <div className="topbar-left">
-          <div className="topbar-brand">Instatgram</div>
+          <div className="topbar-brand">Instantgram</div>
           <span className="topbar-slash topbar-left-slash" aria-hidden="true">/</span>
           <TopbarNav />
         </div>

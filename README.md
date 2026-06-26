@@ -1,4 +1,4 @@
-# Instatgram
+# Instantgram
 
 ## Project structure
 

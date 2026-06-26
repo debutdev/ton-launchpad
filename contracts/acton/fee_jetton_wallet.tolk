@@ -92,7 +92,7 @@ fun sendExcesses(queryId: int, responseDestination: address?): void {
 type FeeWalletAllowedMessage = JettonTransfer | JettonTransferInternal | JettonBurn
 
 contract FeeJettonWallet {
-    author: "Instatgram"
+    author: "Instantgram"
     version: "0.1.0"
     description: "TEP-74 compatible Jetton wallet with sell-only transfer tax"
     storage: WalletStorage

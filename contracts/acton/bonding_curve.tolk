@@ -334,7 +334,7 @@ type BondingAllowedMessage =
     | RetryDedustMigration
 
 contract BondingCurve {
-    author: "Instatgram"
+    author: "Instantgram"
     version: "0.1.0"
     description: "Pump.fun-style bonding curve with DeDust migration"
     storage: BondingStorage
