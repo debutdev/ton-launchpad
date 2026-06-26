@@ -13,7 +13,7 @@ type BuildArtifact = {
 
 const DEAD_ADDRESS = Address.parse('EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c');
 const START_MARKET_CAP_TON = 2037489812551n;
-const DEFAULT_TEST_MIGRATION_CAP = START_MARKET_CAP_TON + toNano('4');
+const DEFAULT_MIGRATION_CAP = START_MARKET_CAP_TON + toNano('4');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -35,6 +35,27 @@ function requireAddress(name: string): Address {
   const value = process.env[name];
   if (!value) throw new Error(`Set ${name}`);
   return Address.parse(value);
+}
+
+function targetNetwork() {
+  if (process.argv.includes('--testnet') || process.env.TON_NETWORK === 'testnet') return 'testnet';
+  return 'mainnet';
+}
+
+function formatAddress(address: Address, isTestnet: boolean) {
+  return address.toString({ testOnly: isTestnet });
+}
+
+function requireTargetAddress(names: string[], isTestnet: boolean): Address {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (!value) continue;
+    if (!isTestnet && /^[k0]Q/.test(value)) {
+      throw new Error(`${name} is a testnet-only address; set a mainnet address for mainnet deploys`);
+    }
+    return Address.parse(value);
+  }
+  throw new Error(`Set ${names.join(' or ')}`);
 }
 
 function factoryInitData(args: {
@@ -113,16 +134,20 @@ async function sendDeploy(args: {
 }
 
 async function main() {
+  const network = targetNetwork();
+  const isTestnet = network === 'testnet';
   const endpoint =
-    process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC';
+    process.env.TONCENTER_ENDPOINT ||
+    (isTestnet ? 'https://testnet.toncenter.com/api/v2/jsonRPC' : 'https://toncenter.com/api/v2/jsonRPC');
   const migrationCap = BigInt(
     argValue('--migration-cap-nano') ||
+      process.env.MIGRATION_MARKET_CAP_NANO ||
       process.env.TESTNET_MIGRATION_MARKET_CAP_NANO ||
-      DEFAULT_TEST_MIGRATION_CAP.toString(),
+      DEFAULT_MIGRATION_CAP.toString(),
   );
   const deployValue = toNano(argValue('--deploy-ton') || '0.6');
   const maxSpend = toNano(argValue('--max-spend-ton') || '1');
-  const minRemaining = toNano(argValue('--min-remaining-ton') || process.env.TESTNET_MIN_REMAINING_TON || '2');
+  const minRemaining = toNano(argValue('--min-remaining-ton') || process.env.MIN_REMAINING_TON || process.env.TESTNET_MIN_REMAINING_TON || '2');
 
   if (deployValue > maxSpend) {
     throw new Error(`Refusing: deploy value exceeds max spend cap`);
@@ -136,9 +161,9 @@ async function main() {
   const key = await mnemonicToWalletKey(mnemonic);
   const wallet = WalletContractV5R1.create({
     publicKey: key.publicKey,
-    walletId: { networkGlobalId: -239 },
+    walletId: { networkGlobalId: isTestnet ? -3 : -239 },
   });
-  const platformWallet = requireAddress('TESTNET_PLATFORM_WALLET');
+  const platformWallet = requireTargetAddress(['PLATFORM_WALLET', 'TESTNET_PLATFORM_WALLET'], isTestnet);
   const dedustNativeVault = process.env.DEDUST_NATIVE_VAULT
     ? Address.parse(process.env.DEDUST_NATIVE_VAULT)
     : DEAD_ADDRESS;
@@ -154,11 +179,12 @@ async function main() {
   };
   const factory = contractAddress(0, factoryInit);
 
-  console.log(`Wallet: ${wallet.address.toString({ testOnly: true })}`);
-  console.log(`Factory: ${factory.toString({ testOnly: true })}`);
+  console.log(`Network: ${network}`);
+  console.log(`Wallet: ${formatAddress(wallet.address, isTestnet)}`);
+  console.log(`Factory: ${formatAddress(factory, isTestnet)}`);
   console.log(`Factory raw: ${factory.toRawString()}`);
-  console.log(`Platform fee wallet owner: ${platformWallet.toString({ testOnly: true })}`);
-  console.log(`Default DeDust native vault: ${dedustNativeVault.toString({ testOnly: true })}`);
+  console.log(`Platform fee wallet owner: ${formatAddress(platformWallet, isTestnet)}`);
+  console.log(`Default DeDust native vault: ${formatAddress(dedustNativeVault, isTestnet)}`);
   console.log(`Migration cap: ${Number(migrationCap) / 1e9} TON market cap`);
   console.log(`Deploy value: ${Number(deployValue) / 1e9} TON`);
 
@@ -194,7 +220,7 @@ async function main() {
 
   const tokenCount = await retry('getTokenCount', () => client.runMethod(factory, 'getTokenCount'));
   console.log(`Factory active. Token count: ${tokenCount.stack.readBigNumber().toString()}`);
-  console.log(`NEXT_PUBLIC_FACTORY_ADDRESS=${factory.toString({ testOnly: true })}`);
+  console.log(`NEXT_PUBLIC_FACTORY_ADDRESS=${formatAddress(factory, isTestnet)}`);
 }
 
 main().catch((error) => {

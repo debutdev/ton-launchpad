@@ -5,7 +5,8 @@ import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import { beginCell, toNano, Address } from '@ton/core';
 import { TonClient } from '@ton/ton';
 import { supabase } from '@/lib/supabase';
-import { TONCONNECT_TESTNET_CHAIN } from '@/lib/launchpad';
+import { TONCONNECT_CHAIN } from '@/lib/launchpad';
+import { DEFAULT_TONCENTER_ENDPOINT } from '@/lib/tonNetwork';
 import {
   getBondingProgress,
   getRequiredBuyGasReserve,
@@ -147,7 +148,7 @@ export default function TokenDetailPage({
     const loadTokenBalance = async () => {
       setBalanceLoading(true);
       try {
-        const client = new TonClient({ endpoint: 'https://testnet.toncenter.com/api/v2/jsonRPC' });
+        const client = new TonClient({ endpoint: DEFAULT_TONCENTER_ENDPOINT });
         const ownerAddress = Address.parse(walletAddress);
         const result = await client.runMethod(
           Address.parse(liveToken.jetton_address),
@@ -256,7 +257,7 @@ export default function TokenDetailPage({
   async function handleBuy() {
     if (!wallet) { tonConnectUI.openModal(); return; }
     if (!amount || Number(amount) <= 0) return;
-    if (wallet.account.chain !== TONCONNECT_TESTNET_CHAIN) return;
+    if (wallet.account.chain !== TONCONNECT_CHAIN) return;
     setSending(true);
     try {
       const body = beginCell()
@@ -274,7 +275,7 @@ export default function TokenDetailPage({
       const tonAmount = buyAmount + gasReserve;
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 300,
-        network: TONCONNECT_TESTNET_CHAIN,
+        network: TONCONNECT_CHAIN,
         messages: [{
           address: liveToken.address,
           amount: tonAmount.toString(),
@@ -292,10 +293,10 @@ export default function TokenDetailPage({
     if (!wallet) { tonConnectUI.openModal(); return; }
     if (!amount || Number(amount) <= 0) return;
     if (sellExceedsBalance) return;
-    if (wallet.account.chain !== TONCONNECT_TESTNET_CHAIN) return;
+    if (wallet.account.chain !== TONCONNECT_CHAIN) return;
     setSending(true);
     try {
-      const client = new TonClient({ endpoint: 'https://testnet.toncenter.com/api/v2/jsonRPC' });
+      const client = new TonClient({ endpoint: DEFAULT_TONCENTER_ENDPOINT });
       
       // Get user's JettonWallet address from JettonMaster
       const result = await client.runMethod(
@@ -328,7 +329,7 @@ export default function TokenDetailPage({
 
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 300,
-        network: TONCONNECT_TESTNET_CHAIN,
+        network: TONCONNECT_CHAIN,
         messages: [{
           address: userJettonWallet.toString(),
           amount: toNano('0.25').toString(), // Total TON attached to the transfer for gas

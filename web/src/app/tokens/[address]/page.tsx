@@ -12,7 +12,7 @@ import { useThemeMode } from '../../providers';
 import {
   DEFAULT_SELL_FORWARD_TON,
   DEFAULT_SELL_TRANSFER_VALUE,
-  TONCONNECT_TESTNET_CHAIN,
+  TONCONNECT_CHAIN,
   buyTokensBody,
   jettonTransferBody,
   parseDecimalToNano,
@@ -24,6 +24,7 @@ import {
 import { subscribeLaunchpadEvents } from '@/lib/liveEvents';
 import { supabase } from '@/lib/supabase';
 import { formatUserError } from '@/lib/userErrors';
+import { TON_NETWORK_LABEL } from '@/lib/tonNetwork';
 
 type PeriodKey = 'hour' | 'day' | 'week' | 'month' | 'ytd' | 'all';
 
@@ -643,8 +644,8 @@ export default function TokenDetailPage() {
       return;
     }
     if (tradeAmountNano <= 0n || sellExceedsBalance) return;
-    if (wallet.account.chain !== TONCONNECT_TESTNET_CHAIN) {
-      setTradeStatus('Switch your wallet to TON testnet before trading.');
+    if (wallet.account.chain !== TONCONNECT_CHAIN) {
+      setTradeStatus(`Switch your wallet to ${TON_NETWORK_LABEL} before trading.`);
       return;
     }
 
@@ -668,14 +669,14 @@ export default function TokenDetailPage() {
         if (!response.ok || !swap.address || !swap.amount) throw new Error(swap.error || 'Unable to build DeDust swap');
         await tonConnectUI.sendTransaction({
           validUntil: Math.floor(Date.now() / 1000) + 300,
-          network: TONCONNECT_TESTNET_CHAIN,
+          network: TONCONNECT_CHAIN,
           messages: [{ address: swap.address, amount: swap.amount, payload: swap.payload || undefined }],
         });
       } else if (tradeSide === 'buy') {
         if (!buyQuote) throw new Error('Unable to quote buy');
         await tonConnectUI.sendTransaction({
           validUntil: Math.floor(Date.now() / 1000) + 300,
-          network: TONCONNECT_TESTNET_CHAIN,
+          network: TONCONNECT_CHAIN,
           messages: [{
             address: token.address,
             amount: buyQuote.txValue.toString(),
@@ -698,7 +699,7 @@ export default function TokenDetailPage() {
         });
         await tonConnectUI.sendTransaction({
           validUntil: Math.floor(Date.now() / 1000) + 300,
-          network: TONCONNECT_TESTNET_CHAIN,
+          network: TONCONNECT_CHAIN,
           messages: [{
             address: balance.walletAddress,
             amount: DEFAULT_SELL_TRANSFER_VALUE.toString(),

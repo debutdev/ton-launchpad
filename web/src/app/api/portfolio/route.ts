@@ -10,8 +10,9 @@ import {
   normalizeTokenRow,
   parseNano,
 } from '@/lib/launchpad';
+import { DEFAULT_TONAPI_ENDPOINT, DEFAULT_TONCENTER_ENDPOINT, formatTonAddress, tonAddressVariants } from '@/lib/tonNetwork';
 
-const TONAPI_ENDPOINT = process.env.TONAPI_ENDPOINT || 'https://testnet.tonapi.io';
+const TONAPI_ENDPOINT = process.env.TONAPI_ENDPOINT || DEFAULT_TONAPI_ENDPOINT;
 const FALLBACK_TON_USD = 2.454;
 
 const TOKEN_SELECT = [
@@ -79,16 +80,6 @@ type TonapiJettonBalance = {
   price_usd?: string | number;
 };
 
-function addressVariants(address: Address) {
-  return Array.from(new Set([
-    address.toRawString(),
-    address.toString(),
-    address.toString({ testOnly: true }),
-    address.toString({ bounceable: false }),
-    address.toString({ bounceable: false, testOnly: true }),
-  ]));
-}
-
 function rawAddressKey(value: string | null | undefined) {
   if (!value) return '';
   try {
@@ -103,8 +94,8 @@ async function loadWalletBalance(client: TonClient, owner: Address, token: DbTok
   if (!jettonMaster) return 0n;
 
   try {
-    const account = encodeURIComponent(owner.toString({ testOnly: true }));
-    const master = encodeURIComponent(Address.parse(jettonMaster).toString({ testOnly: true }));
+    const account = encodeURIComponent(formatTonAddress(owner));
+    const master = encodeURIComponent(formatTonAddress(Address.parse(jettonMaster)));
     const response = await fetch(`${TONAPI_ENDPOINT}/v2/accounts/${account}/jettons/${master}`, {
       cache: 'no-store',
       headers: tonapiHeaders(),
@@ -154,7 +145,7 @@ function tonapiHeaders() {
 
 async function fetchNativeTonHolding(wallet: Address, tonUsd: number): Promise<ExternalHolding> {
   try {
-    const account = wallet.toString({ testOnly: true });
+    const account = formatTonAddress(wallet);
     const response = await fetch(`${TONAPI_ENDPOINT}/v2/accounts/${encodeURIComponent(account)}`, {
       cache: 'no-store',
       headers: tonapiHeaders(),
@@ -214,7 +205,7 @@ function readTonapiUsdPrice(item: TonapiJettonBalance): number {
 
 async function fetchExternalJettonHoldings(wallet: Address): Promise<ExternalHolding[]> {
   try {
-    const account = wallet.toString({ testOnly: true });
+    const account = formatTonAddress(wallet);
     const response = await fetch(`${TONAPI_ENDPOINT}/v2/accounts/${encodeURIComponent(account)}/jettons?currencies=usd`, {
       cache: 'no-store',
       headers: tonapiHeaders(),
@@ -273,7 +264,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Invalid wallet address' }, { status: 400 });
   }
 
-  const variants = addressVariants(wallet);
+  const variants = tonAddressVariants(wallet);
   const [{ data: createdRows, error: createdError }, { data: traderRows, error: traderError }, { data: userRows, error: userError }] = await Promise.all([
     supabase.from('tokens').select(TOKEN_SELECT).in('creator_address', variants).order('created_at', { ascending: false }).limit(50),
     supabase.from('trades').select('*').in('trader_address', variants).order('created_at', { ascending: false }).limit(100),
@@ -307,7 +298,7 @@ export async function GET(request: Request) {
   const tokenByAddress = new Map(tokenRows.map((token) => [token.address, token]));
   const normalizedByAddress = new Map(tokenRows.map((token) => [token.address, normalizeTokenRow(token)]));
   const client = new TonClient({
-    endpoint: process.env.TONCENTER_ENDPOINT || process.env.NEXT_PUBLIC_TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC',
+    endpoint: process.env.TONCENTER_ENDPOINT || process.env.NEXT_PUBLIC_TONCENTER_ENDPOINT || DEFAULT_TONCENTER_ENDPOINT,
     apiKey: process.env.TONCENTER_API_KEY || undefined,
   });
   const tonUsd = await fetchTonUsd();
@@ -363,7 +354,7 @@ export async function GET(request: Request) {
   const createdTokens = ((createdRows || []) as DbTokenRow[]).map((token) => normalizedByAddress.get(token.address) || normalizeTokenRow(token));
 
   return NextResponse.json({
-    wallet: wallet.toString({ testOnly: true }),
+    wallet: formatTonAddress(wallet),
     tonUsd,
     summary: {
       createdCount: createdTokens.length,

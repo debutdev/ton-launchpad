@@ -11,6 +11,8 @@
         "test:acton": "acton test",
         "fmt:acton": "acton fmt --check",
         "build:acton:tolk-js": "ts-node scripts/build_acton_tolk_js.ts",
+        "mainnet:deploy-factory": "ts-node scripts/acton_deploy_factory.ts --mainnet",
+        "mainnet:sweep-fees": "ts-node scripts/acton_sweep_fee_tokens_to_ton.ts --mainnet",
         "testnet:deploy-factory": "ts-node scripts/acton_deploy_factory.ts",
         "testnet:acton:dry-run": "ts-node scripts/acton_testnet_e2e.ts --dry-run",
         "testnet:acton": "ts-node scripts/acton_testnet_e2e.ts --execute",

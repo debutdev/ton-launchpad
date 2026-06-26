@@ -1,13 +1,14 @@
 import { Address, beginCell } from '@ton/core';
 import { TonClient } from '@ton/ton';
 import { NextResponse } from 'next/server';
+import { DEFAULT_TONAPI_ENDPOINT, DEFAULT_TONCENTER_ENDPOINT, formatTonAddress } from '@/lib/tonNetwork';
 
 function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
-const TONCENTER_ENDPOINT = process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC';
-const TONAPI_ENDPOINT = process.env.TONAPI_ENDPOINT || 'https://testnet.tonapi.io';
+const TONCENTER_ENDPOINT = process.env.TONCENTER_ENDPOINT || DEFAULT_TONCENTER_ENDPOINT;
+const TONAPI_ENDPOINT = process.env.TONAPI_ENDPOINT || DEFAULT_TONAPI_ENDPOINT;
 
 function isRateLimit(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -19,8 +20,8 @@ function sleep(ms: number) {
 }
 
 async function fetchTonapiBalance(masterAddress: Address, ownerAddress: Address) {
-  const owner = encodeURIComponent(ownerAddress.toString({ testOnly: true }));
-  const master = encodeURIComponent(masterAddress.toString({ testOnly: true }));
+  const owner = encodeURIComponent(formatTonAddress(ownerAddress));
+  const master = encodeURIComponent(formatTonAddress(masterAddress));
   const headers: Record<string, string> = { accept: 'application/json' };
   if (process.env.TONAPI_KEY) headers.authorization = `Bearer ${process.env.TONAPI_KEY}`;
 
@@ -73,7 +74,7 @@ export async function GET(request: Request) {
           return NextResponse.json(
             {
               balance: tonapiBalance.balance,
-              walletAddress: Address.parse(tonapiBalance.walletAddress).toString({ testOnly: true }),
+              walletAddress: formatTonAddress(Address.parse(tonapiBalance.walletAddress)),
             },
             { headers: { 'cache-control': 'no-store, max-age=0' } },
           );
@@ -90,7 +91,7 @@ export async function GET(request: Request) {
         return NextResponse.json(
           {
             balance: tonapiBalance.balance,
-            walletAddress: result.stack.readAddress().toString({ testOnly: true }),
+            walletAddress: formatTonAddress(result.stack.readAddress()),
           },
           { headers: { 'cache-control': 'no-store, max-age=0' } },
         );
@@ -115,7 +116,7 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           balance: '0',
-          walletAddress: walletAddress.toString({ testOnly: true }),
+          walletAddress: formatTonAddress(walletAddress),
         },
         { headers: { 'cache-control': 'no-store, max-age=0' } },
       );
@@ -135,7 +136,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         balance: walletData!.stack.readBigNumber().toString(),
-        walletAddress: walletAddress.toString({ testOnly: true }),
+        walletAddress: formatTonAddress(walletAddress),
       },
       { headers: { 'cache-control': 'no-store, max-age=0' } },
     );

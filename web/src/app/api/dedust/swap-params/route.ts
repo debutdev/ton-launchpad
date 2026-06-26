@@ -2,6 +2,7 @@ import { Address, Cell, beginCell, toNano } from '@ton/core';
 import { TonClient } from '@ton/ton';
 import { Asset, Factory, PoolType } from '@dedust/sdk';
 import { NextRequest, NextResponse } from 'next/server';
+import { DEFAULT_TONCENTER_ENDPOINT, formatTonAddress } from '@/lib/tonNetwork';
 
 type SwapParamsRequest = {
   side?: 'buy' | 'sell';
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'DeDust configuration is missing' }, { status: 500 });
     }
 
-    const endpoint = sanitize(process.env.TONCENTER_ENDPOINT) || 'https://testnet.toncenter.com/api/v2/jsonRPC';
+    const endpoint = sanitize(process.env.TONCENTER_ENDPOINT) || DEFAULT_TONCENTER_ENDPOINT;
     const apiKey = sanitize(process.env.TONCENTER_API_KEY);
     const client = new TonClient({ endpoint, apiKey: apiKey || undefined });
     const userWallet = Address.parse(body.userWallet);
@@ -138,7 +139,7 @@ export async function POST(request: NextRequest) {
         recipient: userWallet,
       });
       return NextResponse.json({
-        address: nativeVault.toString({ testOnly: true }),
+        address: formatTonAddress(nativeVault),
         amount: (amount + toNano('0.25')).toString(),
         payload: payload.toBoc().toString('base64'),
       });
@@ -156,7 +157,7 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({
-      address: userJettonWallet.toString({ testOnly: true }),
+      address: formatTonAddress(userJettonWallet),
       amount: toNano('0.4').toString(),
       payload: transferBody.toBoc().toString('base64'),
     });

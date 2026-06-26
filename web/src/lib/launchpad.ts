@@ -8,6 +8,7 @@ import {
   getSellQuote,
   MIGRATION_GAS_RESERVE,
 } from './bondingCurve';
+import { TONCONNECT_CHAIN } from './tonNetwork';
 
 export const OP_DEPLOY_TOKEN = 0x20001;
 export const OP_BUY_TOKENS = 0x10001;
@@ -19,9 +20,11 @@ export const NANOS_PER_UNIT_NUMBER = 1_000_000_000;
 export const DEFAULT_DEPLOY_VALUE = toNano('0.7');
 export const DEFAULT_SELL_TRANSFER_VALUE = toNano('0.25');
 export const DEFAULT_SELL_FORWARD_TON = toNano('0.15');
-export const TONCONNECT_TESTNET_CHAIN = '-3';
-export const DEFAULT_TESTNET_MIGRATION_MARKET_CAP_NANO =
-  process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO || '2041489812551';
+export { TONCONNECT_CHAIN };
+export const DEFAULT_MIGRATION_MARKET_CAP_NANO =
+  process.env.NEXT_PUBLIC_MIGRATION_MARKET_CAP_NANO ||
+  process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO ||
+  '2041489812551';
 
 export type DbTokenRow = {
   id?: string | null;
@@ -107,7 +110,7 @@ export function parseNano(value: string | number | null | undefined): bigint {
 }
 
 export function defaultMigrationMarketCapNano(): bigint {
-  return parseNano(DEFAULT_TESTNET_MIGRATION_MARKET_CAP_NANO);
+  return parseNano(DEFAULT_MIGRATION_MARKET_CAP_NANO);
 }
 
 export function parseDecimalToNano(value: string): bigint {

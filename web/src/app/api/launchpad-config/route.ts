@@ -8,7 +8,10 @@ function clean(value: string | undefined) {
 
 export async function GET() {
   const factoryAddress = clean(process.env.NEXT_PUBLIC_FACTORY_ADDRESS);
-  const migrationMarketCapNano = clean(process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO);
+  const migrationMarketCapNano = clean(
+    process.env.NEXT_PUBLIC_MIGRATION_MARKET_CAP_NANO ||
+    process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO,
+  );
 
   if (!factoryAddress) {
     return NextResponse.json({ error: 'Factory address is not configured' }, { status: 500 });
@@ -18,6 +21,7 @@ export async function GET() {
     {
       factoryAddress,
       migrationMarketCapNano,
+      network: process.env.NEXT_PUBLIC_TON_NETWORK || 'mainnet',
       version: process.env.VERCEL_GIT_COMMIT_SHA || 'local',
     },
     {

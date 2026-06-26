@@ -11,6 +11,24 @@ const DEFAULT_DEDUST_FACTORY_ADDRESS = 'EQBfBWT7X2BHg9tXAxzhz2aKiNTU1tpt5NsiK0uS
 const OP_DEDUST_JETTON_SWAP = 0xe3a0d482;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function formatAddress(address: Address, isTestnet: boolean) {
+  return address.toString({ testOnly: isTestnet });
+}
+
+function requireNetworkAddress(value: string, name: string, isTestnet: boolean): string {
+  if (!value) return value;
+  try {
+    const parsed = Address.parseFriendly(value);
+    if (!isTestnet && parsed.isTestOnly) {
+      throw new Error(`${name} is a testnet-only address; set a mainnet address for mainnet sweep runs`);
+    }
+  } catch (error: any) {
+    if (String(error?.message || '').includes('testnet-only address')) throw error;
+    Address.parse(value);
+  }
+  return value;
+}
+
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
 }
@@ -109,33 +127,35 @@ function dedustJettonSwapPayload(args: { pool: Address; minOut: bigint; recipien
 
 async function main() {
   const execute = hasFlag('--execute') && !hasFlag('--dry-run');
+  const isTestnet = process.argv.includes('--testnet') || process.env.TON_NETWORK === 'testnet';
   const jettonMasterRaw = argValue('--jetton-master') || process.env.SWEEP_JETTON_MASTER;
   if (!jettonMasterRaw) {
     throw new Error('Pass --jetton-master=<address> or set SWEEP_JETTON_MASTER');
   }
 
   const dedustFactoryRaw = process.env.DEDUST_FACTORY_ADDRESS || process.env.NEXT_PUBLIC_DEDUST_FACTORY_ADDRESS || DEFAULT_DEDUST_FACTORY_ADDRESS;
-  const mnemonicRaw = process.env.TESTNET_PLATFORM_WALLET_MNEMONIC || process.env.PLATFORM_WALLET_MNEMONIC;
+  const mnemonicRaw = process.env.PLATFORM_WALLET_MNEMONIC || (isTestnet ? process.env.TESTNET_PLATFORM_WALLET_MNEMONIC : '');
   if (!dedustFactoryRaw || !mnemonicRaw || !process.env.TONCENTER_API_KEY) {
-    throw new Error('Set DEDUST_FACTORY_ADDRESS, TESTNET_PLATFORM_WALLET_MNEMONIC, and TONCENTER_API_KEY');
+    throw new Error('Set DEDUST_FACTORY_ADDRESS, PLATFORM_WALLET_MNEMONIC, and TONCENTER_API_KEY');
   }
 
-  const endpoint = process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC';
+  const endpoint = process.env.TONCENTER_ENDPOINT || (isTestnet ? 'https://testnet.toncenter.com/api/v2/jsonRPC' : 'https://toncenter.com/api/v2/jsonRPC');
   const client = new TonClient({ endpoint, apiKey: process.env.TONCENTER_API_KEY });
   const key = await mnemonicToWalletKey(mnemonicRaw.trim().split(/\s+/));
   const wallet = WalletContractV5R1.create({
     publicKey: key.publicKey,
-    walletId: { networkGlobalId: -239 },
+    walletId: { networkGlobalId: isTestnet ? -3 : -239 },
   });
   const openedWallet = client.open(wallet);
-  const expectedPlatform = process.env.TESTNET_PLATFORM_WALLET
-    ? Address.parse(process.env.TESTNET_PLATFORM_WALLET)
+  const expectedPlatformRaw = process.env.PLATFORM_WALLET || (isTestnet ? process.env.TESTNET_PLATFORM_WALLET : '');
+  const expectedPlatform = expectedPlatformRaw
+    ? Address.parse(requireNetworkAddress(expectedPlatformRaw, 'PLATFORM_WALLET', isTestnet))
     : null;
   if (expectedPlatform && !wallet.address.equals(expectedPlatform)) {
-    throw new Error('TESTNET_PLATFORM_WALLET_MNEMONIC does not match TESTNET_PLATFORM_WALLET');
+    throw new Error('PLATFORM_WALLET_MNEMONIC does not match PLATFORM_WALLET');
   }
 
-  const jettonMaster = Address.parse(jettonMasterRaw);
+  const jettonMaster = Address.parse(requireNetworkAddress(jettonMasterRaw, 'SWEEP_JETTON_MASTER', isTestnet));
   const dedustFactory = client.open(Factory.createFromAddress(Address.parse(dedustFactoryRaw)));
   const assets: [Asset, Asset] = [Asset.native(), Asset.jetton(jettonMaster)];
   const [jettonVault, pool] = await Promise.all([
@@ -149,13 +169,13 @@ async function main() {
   const amount = amountRaw ? BigInt(amountRaw) : tokenBalance;
   const txValue = toNano(argValue('--tx-value-ton') || '0.4');
   const forwardTonAmount = toNano(argValue('--forward-ton') || '0.25');
-  const maxSpend = toNano(argValue('--max-spend-ton') || process.env.TESTNET_SWEEP_MAX_SPEND_TON || '0.5');
+  const maxSpend = toNano(argValue('--max-spend-ton') || process.env.SWEEP_MAX_SPEND_TON || process.env.TESTNET_SWEEP_MAX_SPEND_TON || '0.5');
 
   console.log(`Mode: ${execute ? 'EXECUTE' : 'DRY RUN'}`);
-  console.log(`Platform wallet: ${wallet.address.toString({ testOnly: true })}`);
-  console.log(`Fee token wallet: ${platformJettonWallet.toString({ testOnly: true })}`);
-  console.log(`DeDust jetton vault: ${jettonVault.toString({ testOnly: true })}`);
-  console.log(`DeDust pool: ${pool.toString({ testOnly: true })}`);
+  console.log(`Platform wallet: ${formatAddress(wallet.address, isTestnet)}`);
+  console.log(`Fee token wallet: ${formatAddress(platformJettonWallet, isTestnet)}`);
+  console.log(`DeDust jetton vault: ${formatAddress(jettonVault, isTestnet)}`);
+  console.log(`DeDust pool: ${formatAddress(pool, isTestnet)}`);
   console.log(`Fee token balance: ${Number(tokenBalance) / 1e9}`);
   console.log(`Sweep amount: ${Number(amount) / 1e9}`);
   console.log(`Platform TON balance before: ${Number(tonBefore) / 1e9}`);

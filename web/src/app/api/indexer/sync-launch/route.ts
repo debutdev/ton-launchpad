@@ -11,6 +11,7 @@ import {
   getMarketCap,
   getPriceInNanotons,
 } from '@/lib/bondingCurve';
+import { DEFAULT_TONCENTER_ENDPOINT, formatTonAddress } from '@/lib/tonNetwork';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -104,7 +105,7 @@ export async function POST(request: NextRequest) {
   const factoryAddress = clean(process.env.NEXT_PUBLIC_FACTORY_ADDRESS);
   const supabaseUrl = clean(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL);
   const serviceRoleKey = clean(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const endpoint = clean(process.env.TONCENTER_ENDPOINT) || 'https://testnet.toncenter.com/api/v2/jsonRPC';
+  const endpoint = clean(process.env.TONCENTER_ENDPOINT) || DEFAULT_TONCENTER_ENDPOINT;
   const apiKey = clean(process.env.TONCENTER_API_KEY);
   const metadataUrl = (body.metadataUrl || '').trim();
   const submittedAt = Number(body.submittedAt || 0);
@@ -165,10 +166,10 @@ export async function POST(request: NextRequest) {
       if (!metadataMatches && !recentEnough) continue;
 
       const record = {
-        address: parsed.curve.toString(),
-        jetton_address: parsed.master.toString(),
-        master_address: parsed.master.toString(),
-        creator_address: parsed.creator.toString(),
+        address: formatTonAddress(parsed.curve),
+        jetton_address: formatTonAddress(parsed.master),
+        master_address: formatTonAddress(parsed.master),
+        creator_address: formatTonAddress(parsed.creator),
         name: 'Unknown',
         symbol: 'UNK',
         ...metadata,

@@ -1,13 +1,14 @@
 import * as dotenv from 'dotenv';
 import { Address } from '@ton/core';
 import { createClient } from '@supabase/supabase-js';
-import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS } from './deployment_config';
+import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS, CURRENT_FACTORY_ADDRESS } from './deployment_config';
 
 dotenv.config();
 
 const TONAPI_KEY = process.env.TONAPI_KEY || '';
 const TONAPI_WEBHOOK_ENDPOINT = process.env.TONAPI_WEBHOOK_ENDPOINT || '';
-const TONAPI_BASE_URL = process.env.TONAPI_WEBHOOK_BASE_URL || 'https://rt-testnet.tonapi.io';
+const TONAPI_BASE_URL = process.env.TONAPI_WEBHOOK_BASE_URL || 'https://rt.tonapi.io';
+const IS_TESTNET = process.env.TON_NETWORK === 'testnet';
 
 type Webhook = {
   id?: number;
@@ -29,6 +30,20 @@ function requireEnv(value: string, name: string) {
 
 function rawAddress(value: string): string {
   return Address.parse(value).toRawString();
+}
+
+function requireNetworkAddress(value: string, name: string): string {
+  if (!value) return value;
+  try {
+    const parsed = Address.parseFriendly(value);
+    if (!IS_TESTNET && parsed.isTestOnly) {
+      throw new Error(`${name} is a testnet-only address; set a mainnet address for mainnet webhook runs`);
+    }
+  } catch (error: any) {
+    if (String(error?.message || '').includes('testnet-only address')) throw error;
+    Address.parse(value);
+  }
+  return value;
 }
 
 async function tonapi<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -78,14 +93,15 @@ async function loadWatchedAccounts(): Promise<string[]> {
   if (error) throw new Error(error.message);
 
   const accounts = new Set<string>();
-  accounts.add(
-    rawAddress(
-      CURRENT_ACTON_TESTNET_FACTORY_ADDRESS ||
-        process.env.ACTON_TESTNET_FACTORY_ADDRESS ||
-        process.env.NEXT_PUBLIC_FACTORY_ADDRESS ||
-        '',
-    ),
-  );
+  const factoryAddress =
+    process.env.NEXT_PUBLIC_FACTORY_ADDRESS ||
+    process.env.ACTON_FACTORY_ADDRESS ||
+    CURRENT_FACTORY_ADDRESS ||
+    (IS_TESTNET ? process.env.ACTON_TESTNET_FACTORY_ADDRESS || CURRENT_ACTON_TESTNET_FACTORY_ADDRESS : '') ||
+    '';
+  requireEnv(factoryAddress, 'NEXT_PUBLIC_FACTORY_ADDRESS');
+  requireNetworkAddress(factoryAddress, 'NEXT_PUBLIC_FACTORY_ADDRESS');
+  accounts.add(rawAddress(factoryAddress));
   for (const token of (data || []) as TokenRow[]) {
     if (token.address) accounts.add(rawAddress(token.address));
     if (token.ston_pool_address) accounts.add(rawAddress(token.ston_pool_address));

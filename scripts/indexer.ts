@@ -18,7 +18,7 @@ import {
   getMarketCap,
   getPriceInNanotons,
 } from '../lib/bondingCurve';
-import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS } from './deployment_config';
+import { CURRENT_ACTON_TESTNET_FACTORY_ADDRESS, CURRENT_FACTORY_ADDRESS } from './deployment_config';
 import {
   dedustAssetIsJetton,
   dedustAssetIsNative,
@@ -35,12 +35,37 @@ import {
 
 dotenv.config();
 
+const IS_TESTNET = process.env.TON_NETWORK === 'testnet';
+
+function requireNetworkAddress(value: string, name: string): string {
+  if (!value) return value;
+  try {
+    const parsed = Address.parseFriendly(value);
+    if (!IS_TESTNET && parsed.isTestOnly) {
+      throw new Error(`${name} is a testnet-only address; set a mainnet address for mainnet indexer runs`);
+    }
+  } catch (error: any) {
+    if (String(error?.message || '').includes('testnet-only address')) throw error;
+    Address.parse(value);
+  }
+  return value;
+}
+
 const FACTORY_ADDRESS =
-  CURRENT_ACTON_TESTNET_FACTORY_ADDRESS ||
-  process.env.ACTON_TESTNET_FACTORY_ADDRESS ||
   process.env.NEXT_PUBLIC_FACTORY_ADDRESS ||
-  'EQBcjlqVj-4x5NYsGWmJPyM599BK4lsoyrxPWA4ze9spwo9N';
-const PLATFORM_WALLET_ADDRESS = process.env.TESTNET_PLATFORM_WALLET || process.env.NEXT_PUBLIC_PLATFORM_WALLET || '';
+  process.env.ACTON_FACTORY_ADDRESS ||
+  CURRENT_FACTORY_ADDRESS ||
+  (IS_TESTNET ? process.env.ACTON_TESTNET_FACTORY_ADDRESS || CURRENT_ACTON_TESTNET_FACTORY_ADDRESS : '');
+if (!FACTORY_ADDRESS) {
+  throw new Error('Set NEXT_PUBLIC_FACTORY_ADDRESS to the active launchpad factory for this network');
+}
+requireNetworkAddress(FACTORY_ADDRESS, 'NEXT_PUBLIC_FACTORY_ADDRESS');
+const PLATFORM_WALLET_ADDRESS =
+  process.env.PLATFORM_WALLET ||
+  process.env.NEXT_PUBLIC_PLATFORM_WALLET ||
+  (IS_TESTNET ? process.env.TESTNET_PLATFORM_WALLET : '') ||
+  '';
+if (PLATFORM_WALLET_ADDRESS) requireNetworkAddress(PLATFORM_WALLET_ADDRESS, 'PLATFORM_WALLET');
 const PLATFORM_WALLET = PLATFORM_WALLET_ADDRESS ? Address.parse(PLATFORM_WALLET_ADDRESS) : null;
 const DEFAULT_DEDUST_FACTORY_ADDRESS = 'EQBfBWT7X2BHg9tXAxzhz2aKiNTU1tpt5NsiK0uSDW_YAJ67';
 const DEDUST_FACTORY_ADDRESS =
@@ -77,8 +102,9 @@ const AUTO_SWEEP_BALANCE_RETRY_MS = Math.max(
   Number(process.env.AUTO_SWEEP_BALANCE_RETRY_MS || 3_600_000),
 );
 const AUTO_SWEEP_SCAN_INTERVAL_MS = Math.max(60_000, Number(process.env.AUTO_SWEEP_SCAN_INTERVAL_MS || 180_000));
-const AUTO_SWEEP_WALLET_GLOBAL_ID = Number(process.env.AUTO_SWEEP_WALLET_GLOBAL_ID || '-239');
-const PLATFORM_WALLET_MNEMONIC = process.env.TESTNET_PLATFORM_WALLET_MNEMONIC || process.env.PLATFORM_WALLET_MNEMONIC || '';
+const AUTO_SWEEP_WALLET_GLOBAL_ID = Number(process.env.AUTO_SWEEP_WALLET_GLOBAL_ID || (IS_TESTNET ? '-3' : '-239'));
+const PLATFORM_WALLET_MNEMONIC =
+  process.env.PLATFORM_WALLET_MNEMONIC || (IS_TESTNET ? process.env.TESTNET_PLATFORM_WALLET_MNEMONIC : '') || '';
 const TON_USD_PRICE = Number(TON_USD_PRICE_NUM) / Number(TON_USD_PRICE_DEN);
 
 const OP_TOKEN_DEPLOYED = 0x20002;
@@ -151,7 +177,7 @@ type DedustSwapAttribution = {
 type IndexerStateValue = Record<string, string | number | boolean | null>;
 
 const client = new TonClient({
-  endpoint: process.env.TONCENTER_ENDPOINT || 'https://testnet.toncenter.com/api/v2/jsonRPC',
+  endpoint: process.env.TONCENTER_ENDPOINT || (IS_TESTNET ? 'https://testnet.toncenter.com/api/v2/jsonRPC' : 'https://toncenter.com/api/v2/jsonRPC'),
   apiKey: process.env.TONCENTER_API_KEY || undefined,
 });
 
@@ -475,7 +501,7 @@ async function getAutoSweepWallet(): Promise<{ wallet: any; secretKey: Buffer | 
         walletId: { networkGlobalId: AUTO_SWEEP_WALLET_GLOBAL_ID },
       });
       if (PLATFORM_WALLET && !wallet.address.equals(PLATFORM_WALLET)) {
-        console.error('Auto sweep disabled: platform mnemonic does not match TESTNET_PLATFORM_WALLET/NEXT_PUBLIC_PLATFORM_WALLET');
+        console.error('Auto sweep disabled: platform mnemonic does not match PLATFORM_WALLET/NEXT_PUBLIC_PLATFORM_WALLET');
         return null;
       }
       return { wallet: client.open(wallet), secretKey: key.secretKey, address: wallet.address };

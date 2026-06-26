@@ -29,14 +29,20 @@ services:
         sync: false
       - key: NEXT_PUBLIC_FACTORY_ADDRESS
         sync: false
+      - key: TON_NETWORK
+        value: mainnet
+      - key: TONCENTER_ENDPOINT
+        value: https://toncenter.com/api/v2/jsonRPC
+      - key: TONAPI_ENDPOINT
+        value: https://tonapi.io
       - key: DEDUST_FACTORY_ADDRESS
         value: EQBfBWT7X2BHg9tXAxzhz2aKiNTU1tpt5NsiK0uSDW_YAJ67
-      - key: TESTNET_PLATFORM_WALLET
+      - key: PLATFORM_WALLET
         sync: false
-      - key: TESTNET_PLATFORM_WALLET_MNEMONIC
+      - key: PLATFORM_WALLET_MNEMONIC
         sync: false
       - key: AUTO_SWEEP_FEES_ENABLED
-        value: "true"
+        value: "false"
       - key: AUTO_SWEEP_MIN_FEE_TOKENS
         value: "1000"
       - key: AUTO_SWEEP_TX_VALUE_TON
