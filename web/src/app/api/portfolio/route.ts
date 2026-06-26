@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import {
   type DbTokenRow,
   type DbTradeRow,
+  ACTIVE_FACTORY_ADDRESS,
   NANOS_PER_UNIT_NUMBER,
   nanoToNumber,
   normalizeTokenRow,
@@ -17,6 +18,7 @@ const FALLBACK_TON_USD = 2.454;
 
 const TOKEN_SELECT = [
   'id',
+  'factory_address',
   'address',
   'creator_address',
   'name',
@@ -265,8 +267,11 @@ export async function GET(request: Request) {
   }
 
   const variants = tonAddressVariants(wallet);
+  let createdQuery = supabase.from('tokens').select(TOKEN_SELECT).in('creator_address', variants).order('created_at', { ascending: false }).limit(50);
+  if (ACTIVE_FACTORY_ADDRESS) createdQuery = createdQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+
   const [{ data: createdRows, error: createdError }, { data: traderRows, error: traderError }, { data: userRows, error: userError }] = await Promise.all([
-    supabase.from('tokens').select(TOKEN_SELECT).in('creator_address', variants).order('created_at', { ascending: false }).limit(50),
+    createdQuery,
     supabase.from('trades').select('*').in('trader_address', variants).order('created_at', { ascending: false }).limit(100),
     supabase.from('trades').select('*').in('user_address', variants).order('created_at', { ascending: false }).limit(100),
   ]);
@@ -288,8 +293,12 @@ export async function GET(request: Request) {
     ...trades.map((trade) => trade.token_address || ''),
   ].filter(Boolean)));
 
-  const { data: relatedRows, error: relatedError } = relatedAddresses.length > 0
-    ? await supabase.from('tokens').select(TOKEN_SELECT).in('address', relatedAddresses)
+  let relatedQuery = relatedAddresses.length > 0
+    ? supabase.from('tokens').select(TOKEN_SELECT).in('address', relatedAddresses)
+    : null;
+  if (relatedQuery && ACTIVE_FACTORY_ADDRESS) relatedQuery = relatedQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+  const { data: relatedRows, error: relatedError } = relatedQuery
+    ? await relatedQuery
     : { data: [], error: null };
 
   if (relatedError) return NextResponse.json({ error: relatedError.message }, { status: 500 });
@@ -297,6 +306,7 @@ export async function GET(request: Request) {
   const tokenRows = (relatedRows || []) as DbTokenRow[];
   const tokenByAddress = new Map(tokenRows.map((token) => [token.address, token]));
   const normalizedByAddress = new Map(tokenRows.map((token) => [token.address, normalizeTokenRow(token)]));
+  const factoryTrades = trades.filter((trade) => trade.token_address && tokenByAddress.has(trade.token_address));
   const client = new TonClient({
     endpoint: process.env.TONCENTER_ENDPOINT || process.env.NEXT_PUBLIC_TONCENTER_ENDPOINT || DEFAULT_TONCENTER_ENDPOINT,
     apiKey: process.env.TONCENTER_API_KEY || undefined,
@@ -344,13 +354,13 @@ export async function GET(request: Request) {
     ...nonTonkedJettons,
   ].filter((holding) => holding.balance > 0)
     .sort((a, b) => b.valueUsd - a.valueUsd);
-  const buyVolumeTon = trades
+  const buyVolumeTon = factoryTrades
     .filter((trade) => trade.type !== 'sell')
     .reduce((sum, trade) => sum + nanoToNumber(parseNano(trade.ton_amount)), 0);
-  const sellVolumeTon = trades
+  const sellVolumeTon = factoryTrades
     .filter((trade) => trade.type === 'sell')
     .reduce((sum, trade) => sum + nanoToNumber(parseNano(trade.ton_amount)), 0);
-  const tradedTokenAddresses = new Set(trades.map((trade) => trade.token_address).filter(Boolean));
+  const tradedTokenAddresses = new Set(factoryTrades.map((trade) => trade.token_address).filter(Boolean));
   const createdTokens = ((createdRows || []) as DbTokenRow[]).map((token) => normalizedByAddress.get(token.address) || normalizeTokenRow(token));
 
   return NextResponse.json({
@@ -359,7 +369,7 @@ export async function GET(request: Request) {
     summary: {
       createdCount: createdTokens.length,
       tradedCount: tradedTokenAddresses.size,
-      tradeCount: trades.length,
+      tradeCount: factoryTrades.length,
       buyVolumeTon,
       sellVolumeTon,
       netFlowTon: sellVolumeTon - buyVolumeTon,
@@ -375,7 +385,7 @@ export async function GET(request: Request) {
       .filter(Boolean),
     holdings: nonZeroTonkedHoldings,
     walletHoldings,
-    recentTrades: trades.slice(0, 20).map((trade) => ({
+    recentTrades: factoryTrades.slice(0, 20).map((trade) => ({
       ...serializeTrade(trade),
       token: trade.token_address ? normalizedByAddress.get(trade.token_address) || (tokenByAddress.has(trade.token_address) ? normalizeTokenRow(tokenByAddress.get(trade.token_address)!) : null) : null,
     })),

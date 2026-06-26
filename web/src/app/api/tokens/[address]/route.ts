@@ -6,6 +6,7 @@ import {
   type DbTradeRow,
   NANOS_PER_UNIT_NUMBER,
   defaultMigrationMarketCapNano,
+  ACTIVE_FACTORY_ADDRESS,
   nanoToNumber,
   normalizeTokenRow,
   parseNano,
@@ -17,6 +18,7 @@ type ChartPoints = { data: number[]; labels: string[] };
 
 const TOKEN_SELECT = [
   'id',
+  'factory_address',
   'address',
   'creator_address',
   'name',
@@ -273,11 +275,12 @@ export async function GET(
   const { address: rawAddress } = await context.params;
   const address = decodeURIComponent(rawAddress);
 
-  const { data: tokenRow, error: tokenError } = await supabase
+  let tokenQuery = supabase
     .from('tokens')
     .select(TOKEN_SELECT)
-    .eq('address', address)
-    .maybeSingle();
+    .eq('address', address);
+  if (ACTIVE_FACTORY_ADDRESS) tokenQuery = tokenQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+  const { data: tokenRow, error: tokenError } = await tokenQuery.maybeSingle();
 
   if (tokenError) return NextResponse.json({ error: tokenError.message }, { status: 500 });
   if (!tokenRow) return NextResponse.json({ error: 'Token not found' }, { status: 404 });
@@ -289,11 +292,15 @@ export async function GET(
       .eq('token_address', address)
       .order('created_at', { ascending: false })
       .limit(120),
-    supabase
+    (() => {
+      let query = supabase
       .from('tokens')
       .select(TOKEN_SELECT)
       .order('created_at', { ascending: false })
-      .limit(8),
+      .limit(8);
+      if (ACTIVE_FACTORY_ADDRESS) query = query.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+      return query;
+    })(),
   ]);
 
   if (tradesError) return NextResponse.json({ error: tradesError.message }, { status: 500 });

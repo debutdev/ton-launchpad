@@ -11,6 +11,7 @@ import {
   getMarketCap,
   getPriceInNanotons,
 } from '@/lib/bondingCurve';
+import { ACTIVE_FACTORY_ADDRESS } from '@/lib/launchpad';
 import { DEFAULT_TONCENTER_ENDPOINT, formatTonAddress } from '@/lib/tonNetwork';
 
 export const dynamic = 'force-dynamic';
@@ -127,14 +128,17 @@ export async function POST(request: NextRequest) {
     auth: { persistSession: false },
   });
 
-  const { data: existingByMetadata } = metadataUrl
-    ? await supabase
+  let existingQuery = metadataUrl
+    ? supabase
       .from('tokens')
       .select('address')
       .eq('metadata_url', metadataUrl)
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle()
+    : null;
+  if (existingQuery && ACTIVE_FACTORY_ADDRESS) existingQuery = existingQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+  const { data: existingByMetadata } = existingQuery
+    ? await existingQuery.maybeSingle()
     : { data: null };
 
   if (existingByMetadata?.address) {
@@ -166,6 +170,7 @@ export async function POST(request: NextRequest) {
       if (!metadataMatches && !recentEnough) continue;
 
       const record = {
+        factory_address: ACTIVE_FACTORY_ADDRESS || factoryAddress,
         address: formatTonAddress(parsed.curve),
         jetton_address: formatTonAddress(parsed.master),
         master_address: formatTonAddress(parsed.master),

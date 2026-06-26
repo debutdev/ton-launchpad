@@ -119,6 +119,7 @@ const SELL_TAX_DENOMINATOR = 100n;
 const DEDUST_EVENT_PARSER_VERSION = 3;
 
 type TokenRow = {
+  factory_address?: string | null;
   address: string;
   jetton_address?: string | null;
   master_address?: string | null;
@@ -848,11 +849,12 @@ async function fetchTokenMetadata(jettonMaster: Address) {
 }
 
 async function getTokenRow(address: string): Promise<TokenRow | null> {
-  const { data, error } = await supabase
+  let query = supabase
     .from('tokens')
     .select('address, jetton_address, master_address, virtual_ton_reserves, virtual_token_reserves, real_ton_reserves, real_token_reserves, migration_state, ston_pool_address')
-    .eq('address', address)
-    .maybeSingle();
+    .eq('address', address);
+  if (FACTORY_ADDRESS) query = query.eq('factory_address', FACTORY_ADDRESS);
+  const { data, error } = await query.maybeSingle();
   if (error) {
     console.error('Token row query error:', error.message);
     return null;
@@ -861,9 +863,13 @@ async function getTokenRow(address: string): Promise<TokenRow | null> {
 }
 
 async function upsertToken(record: Record<string, unknown>, eventType: 'token.created' | 'token.updated') {
+  const scopedRecord = {
+    factory_address: FACTORY_ADDRESS,
+    ...record,
+  };
   const { data, error } = await supabase
     .from('tokens')
-    .upsert(record, { onConflict: 'address' })
+    .upsert(scopedRecord, { onConflict: 'address' })
     .select()
     .single();
   if (error) {
@@ -1377,6 +1383,7 @@ async function handleTokenDeployed(body: Cell): Promise<boolean> {
   }
 
   const inserted = await upsertToken({
+    factory_address: FACTORY_ADDRESS,
     address: bcAddrStr,
     jetton_address: jmAddrStr,
     master_address: jmAddrStr,
@@ -1784,11 +1791,13 @@ async function pollFeeAutoSweeps() {
 
 async function bootstrap() {
   console.log('Loading existing tokens from database...');
-  const { data, error } = await supabase
+  let query = supabase
     .from('tokens')
     .select('address, jetton_address, master_address, migrated, is_migrated, migration_state, ston_pool_address, created_at')
     .order('created_at', { ascending: false })
     .limit(BOOTSTRAP_TOKEN_LIMIT);
+  if (FACTORY_ADDRESS) query = query.eq('factory_address', FACTORY_ADDRESS);
+  const { data, error } = await query;
   if (error) {
     console.error('Bootstrap error:', error.message);
     return;

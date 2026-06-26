@@ -6,6 +6,7 @@
 -- 1. Tokens Table
 CREATE TABLE IF NOT EXISTS tokens (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    factory_address TEXT,
     address TEXT UNIQUE NOT NULL,          -- BondingCurve Contract Address
     jetton_address TEXT UNIQUE NOT NULL,   -- Jetton Master Address
     master_address TEXT UNIQUE,            -- Legacy alias for Jetton Master Address
@@ -84,6 +85,7 @@ CREATE POLICY "Allow service_role write trades" ON trades
 
 -- ─── INDEXES ─────────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_tokens_address ON tokens(address);
+CREATE INDEX IF NOT EXISTS idx_tokens_factory_address ON tokens(factory_address);
 CREATE INDEX IF NOT EXISTS idx_trades_token_address ON trades(token_address);
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_tokens_created_at ON tokens(created_at DESC);
@@ -97,6 +99,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE trades;
 
 -- Acton live UI additions. These are intentionally additive so they can be
 -- applied to an existing testnet project without rebuilding historical data.
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS factory_address TEXT;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS metadata_url TEXT;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS twitter_url TEXT;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS telegram_url TEXT;

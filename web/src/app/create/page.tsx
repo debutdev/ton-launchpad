@@ -15,7 +15,7 @@ import { DitheredSwirl } from '../DitheredSwirl';
 import { TopbarNav } from '../TopbarNav';
 import { TopbarSearch } from '../TopbarSearch';
 import { useThemeMode } from '../providers';
-import { DEFAULT_DEPLOY_VALUE, TONCONNECT_CHAIN, deployTokenBody } from '@/lib/launchpad';
+import { ACTIVE_FACTORY_ADDRESS, DEFAULT_DEPLOY_VALUE, TONCONNECT_CHAIN, deployTokenBody } from '@/lib/launchpad';
 import { supabase } from '@/lib/supabase';
 import { TON_NETWORK_LABEL } from '@/lib/tonNetwork';
 import { formatUserError } from '@/lib/userErrors';
@@ -44,22 +44,25 @@ async function findIndexedToken(
   creatorAddress: string,
   earliestTimestampMs: number,
 ): Promise<string | null> {
-  const { data: metadataMatch, error: metadataError } = await supabase
+  let metadataQuery = supabase
     .from('tokens')
     .select('address, creator_address, metadata_url, created_at')
     .eq('metadata_url', metadataUrl)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  if (ACTIVE_FACTORY_ADDRESS) metadataQuery = metadataQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+  const { data: metadataMatch, error: metadataError } = await metadataQuery.maybeSingle();
 
   if (!metadataError && typeof metadataMatch?.address === 'string') return metadataMatch.address;
 
-  const { data: recentTokens, error: creatorError } = await supabase
+  let creatorQuery = supabase
     .from('tokens')
     .select('address, creator_address, metadata_url, created_at')
     .eq('creator_address', creatorAddress)
     .order('created_at', { ascending: false })
     .limit(5);
+  if (ACTIVE_FACTORY_ADDRESS) creatorQuery = creatorQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+  const { data: recentTokens, error: creatorError } = await creatorQuery;
 
   if (creatorError) return null;
 

@@ -13,7 +13,7 @@ import { TopbarSearch } from './TopbarSearch';
 import { WordRotate } from './WordRotate';
 import { useThemeMode } from './providers';
 import { getMarketCap, getPriceInNanotons } from '@/lib/bondingCurve';
-import { defaultMigrationMarketCapNano } from '@/lib/launchpad';
+import { ACTIVE_FACTORY_ADDRESS, defaultMigrationMarketCapNano } from '@/lib/launchpad';
 import { subscribeLaunchpadEvents } from '@/lib/liveEvents';
 import { supabase } from '@/lib/supabase';
 
@@ -652,21 +652,27 @@ export default function Home() {
           apiStats = null;
         }
 
-        const { data: tokens, error: tokenError, count: tokenCount } = await supabase
+        let tokenQuery = supabase
           .from('tokens')
           .select('address, creator_address, name, symbol, image_url, virtual_ton_reserves, virtual_token_reserves, real_ton_reserves, created_at', { count: 'exact' })
           .order('created_at', { ascending: false })
           .limit(120);
+        if (ACTIVE_FACTORY_ADDRESS) tokenQuery = tokenQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+        const { data: tokens, error: tokenError, count: tokenCount } = await tokenQuery;
 
         if (tokenError) throw new Error(tokenError.message);
 
         const allTrades: RecentTradeRow[] = [];
         let offset = 0;
 
-        while (true) {
+        const tokenRows = (tokens || []) as TokenRow[];
+        const tokenAddresses = tokenRows.map((token) => token.address).filter(Boolean);
+
+        while (tokenAddresses.length > 0) {
           const { data: trades, error: tradeError } = await supabase
             .from('trades')
             .select('token_address, ton_amount, token_amount, trader_address, user_address, type, created_at, block_time')
+            .in('token_address', tokenAddresses)
             .order('created_at', { ascending: false })
             .range(offset, offset + 999);
 
@@ -678,7 +684,6 @@ export default function Home() {
         }
 
         if (!cancelled) {
-          const tokenRows = (tokens || []) as TokenRow[];
           const tradeRows = allTrades;
           let buyVolumeNano = 0n;
           let sellVolumeNano = 0n;

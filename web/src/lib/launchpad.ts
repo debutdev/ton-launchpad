@@ -25,9 +25,13 @@ export const DEFAULT_MIGRATION_MARKET_CAP_NANO =
   process.env.NEXT_PUBLIC_MIGRATION_MARKET_CAP_NANO ||
   process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO ||
   '100000000000';
+export const ACTIVE_FACTORY_ADDRESS = (process.env.NEXT_PUBLIC_FACTORY_ADDRESS || '')
+  .replace(/[\r\n\t]/g, '')
+  .trim();
 
 export type DbTokenRow = {
   id?: string | null;
+  factory_address?: string | null;
   address?: string;
   jetton_address?: string | null;
   master_address?: string | null;

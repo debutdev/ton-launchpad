@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { ACTIVE_FACTORY_ADDRESS } from '@/lib/launchpad';
 
 type TradeRow = {
   type: 'buy' | 'sell' | string | null;
@@ -49,8 +50,11 @@ async function getTonUsdPrice() {
 }
 
 export async function GET() {
-  const [{ count, error: tokenError }, tonUsdPrice] = await Promise.all([
-    supabase.from('tokens').select('id', { count: 'exact' }).limit(1),
+  let tokenQuery = supabase.from('tokens').select('address', { count: 'exact' }).limit(10000);
+  if (ACTIVE_FACTORY_ADDRESS) tokenQuery = tokenQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+
+  const [{ data: tokenRows, count, error: tokenError }, tonUsdPrice] = await Promise.all([
+    tokenQuery,
     getTonUsdPrice(),
   ]);
 
@@ -61,11 +65,25 @@ export async function GET() {
   let buyVolumeNano = 0n;
   let sellVolumeNano = 0n;
   let offset = 0;
+  const tokenAddresses = (tokenRows || []).map((token) => token.address).filter(Boolean);
+
+  if (tokenAddresses.length === 0) {
+    return NextResponse.json({
+      tonUsdPrice,
+      tokensLaunched: count ?? 0,
+      buyVolumeTon: '0',
+      sellVolumeTon: '0',
+      totalVolumeTon: '0',
+      totalVolumeUsd: 0,
+      updatedAt: new Date().toISOString(),
+    });
+  }
 
   while (true) {
     const { data, error } = await supabase
       .from('trades')
       .select('type, ton_amount')
+      .in('token_address', tokenAddresses)
       .range(offset, offset + TRADE_PAGE_SIZE - 1);
 
     if (error) {

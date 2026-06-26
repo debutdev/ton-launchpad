@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { type DbTokenRow, type DbTradeRow, nanoToNumber, normalizeTokenRow, parseNano } from '@/lib/launchpad';
+import { ACTIVE_FACTORY_ADDRESS, type DbTokenRow, type DbTradeRow, nanoToNumber, normalizeTokenRow, parseNano } from '@/lib/launchpad';
 
 type SortKey = 'marketCap' | 'price' | 'name' | 'time';
 type SortDirection = 'asc' | 'desc';
@@ -8,6 +8,7 @@ type SortDirection = 'asc' | 'desc';
 const PAGE_SIZE = 16;
 const TOKEN_SELECT = [
   'id',
+  'factory_address',
   'address',
   'creator_address',
   'name',
@@ -77,10 +78,12 @@ export async function GET(request: Request) {
   const direction = normalizeDirection(url.searchParams.get('direction'));
   const query = shortSortValue(url.searchParams.get('q'));
 
-  const { data: tokenRows, error: tokenError } = await supabase
+  let tokenQuery = supabase
     .from('tokens')
     .select(TOKEN_SELECT)
     .order('created_at', { ascending: false });
+  if (ACTIVE_FACTORY_ADDRESS) tokenQuery = tokenQuery.eq('factory_address', ACTIVE_FACTORY_ADDRESS);
+  const { data: tokenRows, error: tokenError } = await tokenQuery;
 
   if (tokenError) {
     return NextResponse.json({ error: tokenError.message }, { status: 500 });
