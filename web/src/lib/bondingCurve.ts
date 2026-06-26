@@ -23,14 +23,14 @@ export const TON_USD_PRICE_DEN = 1_000n;
 /** Target launch market cap in USD */
 export const START_MARKET_CAP_USD = 5_000n;
 
-/** Target migration market cap in USD */
-export const MIGRATION_MARKET_CAP_USD = 69_000n;
+/** Approximate migration market cap in USD at the snapshot price */
+export const MIGRATION_MARKET_CAP_USD = 245n;
 
 /** Launch market cap converted to TON at the snapshot price */
 export const START_MARKET_CAP_TON = 2_037_489_812_551n;
 
-/** Migration market cap converted to TON at the snapshot price */
-export const MIGRATION_MARKET_CAP_TON = 28_117_359_413_203n;
+/** Migration market cap requested for production: 100 TON */
+export const MIGRATION_MARKET_CAP_TON = 100n * NANOS_PER_TON;
 
 /** Initial virtual token reserves: 1,073,000,191 tokens */
 export const INITIAL_VIRTUAL_TOKENS = 1_073_000_191n * NANOS_PER_TON;

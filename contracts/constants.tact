@@ -15,10 +15,9 @@ const INITIAL_VIRTUAL_TOKENS: Int = 1073000000 * NANOS_PER_TON;
 // Real token supply for bonding curve: 793,100,000 tokens
 const REAL_TOKEN_SUPPLY: Int = 793100000 * NANOS_PER_TON;
 
-// Production migration target: 85 SOL, denominated in TON.
-// Keep the live testnet threshold low while DeDust migration is being tested.
-const PRODUCTION_MIGRATION_THRESHOLD: Int = 85 * SOL_TO_TON_SCALE * NANOS_PER_TON;
-const MIGRATION_THRESHOLD: Int = ton("0.2");
+// Production migration target: 100 TON, denominated as market cap in nanotons.
+const PRODUCTION_MIGRATION_THRESHOLD: Int = 100 * NANOS_PER_TON;
+const MIGRATION_THRESHOLD: Int = PRODUCTION_MIGRATION_THRESHOLD;
 const MIGRATION_TOKEN_RESERVE: Int = 206900000 * NANOS_PER_TON;
 const MIGRATION_GAS_RESERVE: Int = ton("0.8");
 

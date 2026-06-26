@@ -281,7 +281,7 @@ fun onInternalMessage(in: InMessage) {
         UpdateFactoryMigrationMarketCap => {
             var storage = FactoryStorage.load();
             assert (in.senderAddress == storage.owner) throw 703;
-            assert (msg.migrationMarketCapTon > START_MARKET_CAP_TON) throw 704;
+            assert (msg.migrationMarketCapTon > 0) throw 704;
             storage.migrationMarketCapTon = msg.migrationMarketCapTon;
             storage.save();
         }

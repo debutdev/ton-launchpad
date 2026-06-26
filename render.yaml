@@ -3,7 +3,7 @@ services:
     name: tonked-live-events
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --omit=dev
     startCommand: npm run live-events
     healthCheckPath: /health
     autoDeploy: true
@@ -16,7 +16,7 @@ services:
     name: tonked-indexer
     runtime: node
     plan: free
-    buildCommand: npm install --include=dev
+    buildCommand: npm install --omit=dev
     startCommand: npm run indexer
     healthCheckPath: /health
     autoDeploy: true

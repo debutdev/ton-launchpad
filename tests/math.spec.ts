@@ -79,12 +79,13 @@ describe('Constants', () => {
     expect((START_MARKET_CAP_TON * TON_USD_PRICE_NUM) / (NANOS_PER_TON * TON_USD_PRICE_DEN)).toBe(START_MARKET_CAP_USD);
   });
 
-  it('MIGRATION_MARKET_CAP_TON is $69k at the snapshot price', () => {
-    expect(MIGRATION_MARKET_CAP_USD).toBe(69_000n);
+  it('MIGRATION_MARKET_CAP_TON is the requested 100 TON cap', () => {
+    expect(MIGRATION_MARKET_CAP_TON).toBe(TON(100));
+    expect(MIGRATION_MARKET_CAP_USD).toBe(245n);
     expect((MIGRATION_MARKET_CAP_TON * TON_USD_PRICE_NUM) / (NANOS_PER_TON * TON_USD_PRICE_DEN)).toBe(MIGRATION_MARKET_CAP_USD);
   });
 
-  it('migration threshold is the $69k market cap target', () => {
+  it('migration threshold is the 100 TON market cap target', () => {
     expect(PRODUCTION_MIGRATION_THRESHOLD).toBe(MIGRATION_MARKET_CAP_TON);
     expect(MIGRATION_THRESHOLD).toBe(MIGRATION_MARKET_CAP_TON);
   });
@@ -337,6 +338,12 @@ describe('100 sequential buys — price must increase monotonically', () => {
 // ─── Migration Threshold ─────────────────────────────────────────────────────
 
 describe('Migration threshold', () => {
+  it('initial launch market cap is already above the requested 100 TON threshold', () => {
+    const initial = createInitialState();
+    expect(getMarketCap(initial.virtualTonReserves, initial.virtualTokenReserves)).toBeGreaterThan(MIGRATION_THRESHOLD);
+    expect(shouldMigrate(getMarketCap(initial.virtualTonReserves, initial.virtualTokenReserves))).toBe(true);
+  });
+
   it('shouldMigrate returns false below migration threshold', () => {
     expect(shouldMigrate(MIGRATION_THRESHOLD / 2n)).toBe(false);
     expect(shouldMigrate(TON(0))).toBe(false);

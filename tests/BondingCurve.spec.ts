@@ -16,6 +16,7 @@ import {
   INITIAL_VIRTUAL_TON,
   INITIAL_VIRTUAL_TOKENS,
   REAL_TOKEN_SUPPLY,
+  MIGRATION_THRESHOLD,
   MIGRATION_TOKEN_RESERVE,
   SELL_TAX_BPS,
 } from '../lib/bondingCurve';
@@ -461,7 +462,7 @@ describe('BondingCurve Contract', () => {
     }
   });
 
-  it('auto-migrates when a buy crosses the low test threshold', async () => {
+  it('auto-migrates when a buy crosses the 100 TON threshold', async () => {
     const ownTokenWallet = await jettonMaster.getGetWalletAddress(bondingCurve.address);
     const dedustNativeVault = await blockchain.treasury('dedust-native-vault');
     const dedustJettonVault = await blockchain.treasury('dedust-jetton-vault');
@@ -482,7 +483,7 @@ describe('BondingCurve Contract', () => {
 
     const result = await bondingCurve.send(
       buyer.getSender(),
-      { value: toNano('1.1') },
+      { value: toNano('101') },
       { $$type: 'BuyTokens', queryId: 1n, minTokensOut: 0n },
     );
 
@@ -493,7 +494,7 @@ describe('BondingCurve Contract', () => {
     });
 
     const reserves = await bondingCurve.getGetReserves();
-    expect(reserves.realTonReserves).toBeGreaterThanOrEqual(toNano('0.2'));
+    expect(reserves.realTonReserves).toBeGreaterThanOrEqual(MIGRATION_THRESHOLD);
     expect(reserves.migrated).toBe(true);
 
     expect(result.transactions).toHaveTransaction({

@@ -31,8 +31,9 @@ get fun `test initial market cap equals launch target`() {
     expect(initialMarketCap).toEqual(START_MARKET_CAP_TON);
 }
 
-get fun `test migration market cap target is higher than launch target`() {
-    expect(MIGRATION_MARKET_CAP_TON > START_MARKET_CAP_TON).toBeTrue();
+get fun `test migration market cap target is requested 100 TON cap`() {
+    expect(MIGRATION_MARKET_CAP_TON).toEqual(ton("100"));
+    expect(MIGRATION_MARKET_CAP_TON < START_MARKET_CAP_TON).toBeTrue();
 }
 
 get fun `test buy increases market cap`() {
