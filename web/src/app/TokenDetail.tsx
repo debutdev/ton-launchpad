@@ -284,7 +284,7 @@ export default function TokenDetailPage({
         }],
       });
       setAmount('');
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('Buy failed:', e);
     }
     setSending(false);
@@ -338,7 +338,7 @@ export default function TokenDetailPage({
         }],
       });
       setAmount('');
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('Sell failed:', e);
     }
     setSending(false);

@@ -192,8 +192,8 @@ function TelegramMiniAppRuntime({
 
     async function bootTelegramMiniApp() {
       try {
-        const module = await import('@twa-dev/sdk') as unknown as { default: TelegramWebApp };
-        const webApp = module.default;
+        const sdkModule = await import('@twa-dev/sdk') as unknown as { default: TelegramWebApp };
+        const webApp = sdkModule.default;
         const isTelegram = Boolean(webApp?.initData || window.location.search.includes('tgWebAppData'));
         if (!isTelegram || disposed) return;
 
