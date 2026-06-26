@@ -24,7 +24,7 @@
     "framer-motion": "^10.18.0",
     "lightweight-charts": "^4.2.3",
     "lucide-react": "^1.14.0",
-    "next": "16.2.5",
+    "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "tailwind-merge": "^3.5.0"
@@ -35,11 +35,16 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.5",
+    "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
     "typescript": "^5"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.15"
+    }
   }
 }
