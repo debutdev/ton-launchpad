@@ -29,6 +29,12 @@ services:
         sync: false
       - key: NEXT_PUBLIC_FACTORY_ADDRESS
         sync: false
+      - key: ACTON_FACTORY_ADDRESS
+        sync: false
+      - key: MIGRATION_MARKET_CAP_NANO
+        value: "100000000000"
+      - key: NEXT_PUBLIC_MIGRATION_MARKET_CAP_NANO
+        value: "100000000000"
       - key: TON_NETWORK
         value: mainnet
       - key: TONCENTER_ENDPOINT
@@ -37,6 +43,8 @@ services:
         value: https://tonapi.io
       - key: DEDUST_FACTORY_ADDRESS
         value: EQBfBWT7X2BHg9tXAxzhz2aKiNTU1tpt5NsiK0uSDW_YAJ67
+      - key: DEDUST_NATIVE_VAULT
+        value: EQDa4VOnTYlLvDJ0gZjNYm5PXfSmmtL6Vs6A_CZEtXCNICq_
       - key: PLATFORM_WALLET
         sync: false
       - key: PLATFORM_WALLET_MNEMONIC

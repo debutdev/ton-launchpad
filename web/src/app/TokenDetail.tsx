@@ -5,13 +5,12 @@ import { useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import { beginCell, toNano, Address } from '@ton/core';
 import { TonClient } from '@ton/ton';
 import { supabase } from '@/lib/supabase';
-import { TONCONNECT_CHAIN } from '@/lib/launchpad';
+import { defaultMigrationMarketCapNano, TONCONNECT_CHAIN } from '@/lib/launchpad';
 import { DEFAULT_TONCENTER_ENDPOINT } from '@/lib/tonNetwork';
 import {
   getBondingProgress,
   getRequiredBuyGasReserve,
   MIGRATION_GAS_RESERVE,
-  MIGRATION_MARKET_CAP_TON as MIGRATION_MARKET_CAP_TON_NANO,
 } from '@/lib/bondingCurve';
 import { createChart, ColorType, IChartApi } from 'lightweight-charts';
 import type { AreaData, UTCTimestamp } from 'lightweight-charts';
@@ -31,6 +30,7 @@ interface Trade {
 }
 
 const TOTAL_SUPPLY_NANO = 1_000_000_000n * 1_000_000_000n;
+const MIGRATION_MARKET_CAP_TON_NANO = defaultMigrationMarketCapNano();
 const MIGRATION_MARKET_CAP_TON = Number(MIGRATION_MARKET_CAP_TON_NANO) / 1e9;
 const OP_BUY_TOKENS = 0x10001;
 const OP_SELL_TOKENS = 0x10002;
@@ -222,7 +222,7 @@ export default function TokenDetailPage({
   }, [mounted, liveTrades.length, liveToken.virtual_ton_reserves]);
 
   const mcapNano = getMarketCapNano(liveToken.virtual_ton_reserves, liveToken.virtual_token_reserves);
-  const progress = getBondingProgress(mcapNano);
+  const progress = getBondingProgress(mcapNano, MIGRATION_MARKET_CAP_TON_NANO);
   const mcap = getMarketCap(liveToken.virtual_ton_reserves, liveToken.virtual_token_reserves);
   const price = Number(BigInt(liveToken.virtual_ton_reserves || '0')) / Number(BigInt(liveToken.virtual_token_reserves || '1'));
 
@@ -235,7 +235,7 @@ export default function TokenDetailPage({
       if (tab === 'buy') {
         const tonNano = parseNanoAmount(amount);
         const tokensOut = getBuyQuote(vTon, vTokens, tonNano);
-        const gasReserve = getRequiredBuyGasReserve(tonNano, vTon, vTokens);
+        const gasReserve = getRequiredBuyGasReserve(tonNano, vTon, vTokens, MIGRATION_MARKET_CAP_TON_NANO);
         const migrationSuffix = gasReserve === MIGRATION_GAS_RESERVE ? ` + ${Number(MIGRATION_GAS_RESERVE) / 1e9} TON migration gas` : '';
         quoteText = `~ ${(Number(tokensOut) / 1e9).toLocaleString()} tokens${migrationSuffix}`;
       } else {
@@ -271,6 +271,7 @@ export default function TokenDetailPage({
         buyAmount,
         BigInt(liveToken.virtual_ton_reserves || '0'),
         BigInt(liveToken.virtual_token_reserves || '1'),
+        MIGRATION_MARKET_CAP_TON_NANO,
       );
       const tonAmount = buyAmount + gasReserve;
       await tonConnectUI.sendTransaction({

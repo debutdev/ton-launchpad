@@ -10,7 +10,8 @@ export async function GET() {
   const factoryAddress = clean(process.env.NEXT_PUBLIC_FACTORY_ADDRESS);
   const migrationMarketCapNano = clean(
     process.env.NEXT_PUBLIC_MIGRATION_MARKET_CAP_NANO ||
-    process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO,
+    process.env.NEXT_PUBLIC_TESTNET_MIGRATION_MARKET_CAP_NANO ||
+    '100000000000',
   );
 
   if (!factoryAddress) {

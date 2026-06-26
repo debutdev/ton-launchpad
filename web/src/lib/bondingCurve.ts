@@ -130,6 +130,7 @@ export function getRequiredBuyGasReserve(
   tonIn: bigint,
   virtualTonReserves: bigint,
   virtualTokenReserves: bigint,
+  migrationMarketCapTon: bigint = MIGRATION_MARKET_CAP_TON,
 ): bigint {
   if (tonIn <= 0n) return BUY_GAS_RESERVE;
 
@@ -138,7 +139,7 @@ export function getRequiredBuyGasReserve(
     quote.newVirtualTonReserves,
     quote.newVirtualTokenReserves,
   );
-  return shouldMigrate(postBuyMarketCap) ? MIGRATION_GAS_RESERVE : BUY_GAS_RESERVE;
+  return shouldMigrate(postBuyMarketCap, migrationMarketCapTon) ? MIGRATION_GAS_RESERVE : BUY_GAS_RESERVE;
 }
 
 /**
@@ -325,8 +326,11 @@ export function getMarketCap(
  * @param marketCapTon - Current market cap in nanotons
  * @returns true if marketCapTon >= MIGRATION_MARKET_CAP_TON
  */
-export function shouldMigrate(marketCapTon: bigint): boolean {
-  return marketCapTon >= MIGRATION_MARKET_CAP_TON;
+export function shouldMigrate(
+  marketCapTon: bigint,
+  migrationMarketCapTon: bigint = MIGRATION_MARKET_CAP_TON,
+): boolean {
+  return migrationMarketCapTon > 0n && marketCapTon >= migrationMarketCapTon;
 }
 
 /**
@@ -425,10 +429,13 @@ export function parseTon(ton: string): bigint {
  * Calculate the bonding progress as a percentage (0–100).
  * Returns an integer percentage.
  */
-export function getBondingProgress(marketCapTon: bigint): number {
-  if (marketCapTon <= 0n) return 0;
-  if (marketCapTon >= MIGRATION_MARKET_CAP_TON) return 100;
-  return Number((marketCapTon * 100n) / MIGRATION_MARKET_CAP_TON);
+export function getBondingProgress(
+  marketCapTon: bigint,
+  migrationMarketCapTon: bigint = MIGRATION_MARKET_CAP_TON,
+): number {
+  if (marketCapTon <= 0n || migrationMarketCapTon <= 0n) return 0;
+  if (marketCapTon >= migrationMarketCapTon) return 100;
+  return Number((marketCapTon * 100n) / migrationMarketCapTon);
 }
 
 /**

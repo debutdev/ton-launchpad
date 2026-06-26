@@ -12,7 +12,8 @@ import { TopbarNav } from './TopbarNav';
 import { TopbarSearch } from './TopbarSearch';
 import { WordRotate } from './WordRotate';
 import { useThemeMode } from './providers';
-import { getMarketCap, getPriceInNanotons, MIGRATION_THRESHOLD } from '@/lib/bondingCurve';
+import { getMarketCap, getPriceInNanotons } from '@/lib/bondingCurve';
+import { defaultMigrationMarketCapNano } from '@/lib/launchpad';
 import { subscribeLaunchpadEvents } from '@/lib/liveEvents';
 import { supabase } from '@/lib/supabase';
 
@@ -295,6 +296,7 @@ function buildRecentActivity(tokens: TokenRow[], trades: RecentTradeRow[]) {
 function buildTopMemes(tokens: TokenRow[], trades: MemeTradeRow[]) {
   if (tokens.length === 0) return [];
 
+  const migrationMarketCapNano = defaultMigrationMarketCapNano();
   const tradeStats = new Map<string, { volumeNano: bigint; holders: Set<string> }>();
 
   for (const trade of trades) {
@@ -337,7 +339,9 @@ function buildTopMemes(tokens: TokenRow[], trades: MemeTradeRow[]) {
         priceTon: nanoToTon(priceNano),
         holders: stats?.holders.size ?? 0,
         volumeTon: nanoToTon(stats?.volumeNano ?? realTonReserves),
-        progressPercent: clampPercent(Number(realTonReserves * 10000n / MIGRATION_THRESHOLD) / 100),
+        progressPercent: migrationMarketCapNano > 0n
+          ? clampPercent(Number(marketCapNano * 10000n / migrationMarketCapNano) / 100)
+          : 0,
         accentHue: tokenAccentHue({ name, ticker }),
       };
     })
