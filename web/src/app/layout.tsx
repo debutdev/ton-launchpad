@@ -5,12 +5,12 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "Tonked.io - Memecoin Launchpad on TON",
+  title: "Instatgram - Memecoin Launchpad on TON",
   description: "Launch and trade memecoins on TON blockchain via Telegram",
-  applicationName: "Tonked.io",
+  applicationName: "Instatgram",
   appleWebApp: {
     capable: true,
-    title: "Tonked.io",
+    title: "Instatgram",
     statusBarStyle: "default",
   },
 };

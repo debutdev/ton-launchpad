@@ -1816,7 +1816,7 @@ async function bootstrap() {
 
 async function main() {
   acquireIndexerLock();
-  console.log('Tonked indexer');
+  console.log('Instatgram indexer');
   if (INDEXER_DISABLED_REASON) {
     console.warn(`Indexer disabled: ${INDEXER_DISABLED_REASON}`);
     startTonapiWebhookReceiver();

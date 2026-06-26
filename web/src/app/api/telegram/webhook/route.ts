@@ -17,7 +17,7 @@ type TelegramUpdate = {
 };
 
 const COMMANDS = [
-  { command: 'start', description: 'Open Tonked launchpad' },
+  { command: 'start', description: 'Open Instatgram launchpad' },
   { command: 'launchpad', description: 'Open the Mini App' },
   { command: 'create', description: 'Launch a token' },
   { command: 'tokens', description: 'Browse live tokens' },
@@ -92,7 +92,7 @@ async function sendCommandReply(chatId: number | string, command: string, arg: s
   if (command === 'create') {
     await telegram('sendMessage', {
       chat_id: chatId,
-      text: 'Launch a token on Tonked.',
+      text: 'Launch a token on Instatgram.',
       reply_markup: webAppKeyboard([{ text: 'Create token', path: '/create' }]),
     });
     return;
@@ -101,7 +101,7 @@ async function sendCommandReply(chatId: number | string, command: string, arg: s
   if (command === 'tokens') {
     await telegram('sendMessage', {
       chat_id: chatId,
-      text: 'Browse live Tonked tokens.',
+      text: 'Browse live Instatgram tokens.',
       reply_markup: webAppKeyboard([{ text: 'View tokens', path: '/tokens' }]),
     });
     return;
@@ -110,7 +110,7 @@ async function sendCommandReply(chatId: number | string, command: string, arg: s
   if (command === 'portfolio') {
     await telegram('sendMessage', {
       chat_id: chatId,
-      text: 'Open your Tonked portfolio.',
+      text: 'Open your Instatgram portfolio.',
       reply_markup: webAppKeyboard([{ text: 'View portfolio', path: '/portfolio' }]),
     });
     return;
@@ -120,7 +120,7 @@ async function sendCommandReply(chatId: number | string, command: string, arg: s
     await telegram('sendMessage', {
       chat_id: chatId,
       text: [
-        'Tonked commands:',
+        'Instatgram commands:',
         '/launchpad - open the app',
         '/create - launch a token',
         '/tokens - browse live tokens',
@@ -139,8 +139,8 @@ async function sendCommandReply(chatId: number | string, command: string, arg: s
   const startPath = command === 'start' ? tokenRouteFromStartArg(arg) : '/';
   await telegram('sendMessage', {
     chat_id: chatId,
-    text: 'Open Tonked to create, buy, sell, and track TON launchpad tokens.',
-    reply_markup: webAppKeyboard([{ text: 'Open Tonked', path: startPath }]),
+    text: 'Open Instatgram to create, buy, sell, and track TON launchpad tokens.',
+    reply_markup: webAppKeyboard([{ text: 'Open Instatgram', path: startPath }]),
   });
 }
 

@@ -220,7 +220,7 @@ function TokenTopbar() {
   return (
     <div className="dashboard-topbar">
       <div className="topbar-left">
-        <div className="topbar-brand">tonked</div>
+        <div className="topbar-brand">Instatgram</div>
         <span className="topbar-slash topbar-left-slash" aria-hidden="true">/</span>
         <TopbarNav />
       </div>
@@ -772,7 +772,7 @@ export default function TokenDetailPage() {
                         <strong>{token.progressPercent.toFixed(2)}%</strong>
                       </div>
                     </div>
-                    <p>{token.description || `Launched on Tonked with a fair bonding curve on TON.`}</p>
+                    <p>{token.description || `Launched on Instatgram with a fair bonding curve on TON.`}</p>
                   </div>
                 </div>
 

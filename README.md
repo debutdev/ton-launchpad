@@ -1,4 +1,4 @@
-# tonlaunchpad
+# Instatgram
 
 ## Project structure
 

@@ -65,7 +65,7 @@ type MasterAllowedMessage =
     | CloseMint
 
 contract FeeJettonMaster {
-    author: "Tonked"
+    author: "Instatgram"
     version: "0.1.0"
     description: "TEP-74 compatible custom Jetton master with curve-controlled minting"
     storage: MasterStorage

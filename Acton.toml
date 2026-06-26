@@ -2,8 +2,8 @@
 acton = "1.0.0"
 
 [package]
-name = "tonked-launchpad"
-description = "Pump.fun-style TON launchpad contracts with sell-fee Jettons and DeDust migration"
+name = "instatgram-launchpad"
+description = "Instatgram TON launchpad contracts with sell-fee Jettons and DeDust migration"
 version = "0.1.0"
 
 [contracts.BondingCurve]
